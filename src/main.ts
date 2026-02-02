@@ -133,6 +133,9 @@ function render() {
 	axis.appendChild(renderCenterZero(engine.width));
 
 	const ball = computeBallPositions(engine);
+	axis.appendChild(renderValueFill(engine.width, ball.xA, Math.sign(state.valueA) || 0, "a"));
+	axis.appendChild(renderValueFill(engine.width, ball.xB, Math.sign(state.valueB) || 0, "b"));
+
 	const vm = engine.numberLine.buildViewModel(engine.width);
 	for (const t of vm.tickMarks) {
 		axis.appendChild(renderTick(t.position, classifyTickHeight(t.height, engine.numberLine.biggestTickPatternValue)));
@@ -184,15 +187,41 @@ function renderAxisBackground(width: number): HTMLElement {
 	const left = document.createElement("div");
 	left.className = "absolute inset-y-0 left-0";
 	left.style.width = `${width / 2}px`;
-	left.style.background = "rgba(59, 130, 246, 0.06)";
+	left.style.background = "rgba(59, 130, 246, 0.06)"; // cool (negative)
 
 	const right = document.createElement("div");
 	right.className = "absolute inset-y-0 right-0";
 	right.style.width = `${width / 2}px`;
-	right.style.background = "rgba(34, 197, 94, 0.06)";
+	right.style.background = "rgba(249, 115, 22, 0.06)"; // warm (positive)
 
 	bg.append(left, right);
 	return bg;
+}
+
+function renderValueFill(width: number, ballX: number, sign: -1 | 0 | 1, which: "a" | "b"): HTMLElement {
+	const mid = width / 2;
+	const start = Math.min(mid, ballX);
+	const end = Math.max(mid, ballX);
+	const w = Math.max(0, end - start);
+
+	const el = document.createElement("div");
+	el.className = "absolute inset-y-0 pointer-events-none";
+	el.style.left = `${start}px`;
+	el.style.width = `${w}px`;
+
+	if (w < 1 || sign === 0) {
+		el.style.width = "0px";
+		return el;
+	}
+
+	const cool = { a: "rgba(59,130,246,0.22)", b: "rgba(37,99,235,0.18)" };
+	const warm = { a: "rgba(249,115,22,0.22)", b: "rgba(234,88,12,0.18)" };
+	const palette = sign < 0 ? cool : warm;
+	const c = which === "a" ? palette.a : palette.b;
+	const dir = ballX >= mid ? "to right" : "to left";
+	el.style.background = `linear-gradient(${dir}, ${c}, rgba(255,255,255,0))`;
+	el.style.borderRadius = "14px";
+	return el;
 }
 
 function renderCenterZero(width: number): HTMLElement {
