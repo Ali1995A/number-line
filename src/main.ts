@@ -524,6 +524,7 @@ function ensureAxisOverlay(host: HTMLElement) {
 	overlay.style.position = "absolute";
 	overlay.style.inset = "0";
 	overlay.style.pointerEvents = "auto";
+	overlay.style.zIndex = "1";
 	host.appendChild(overlay);
 	return overlay;
 }

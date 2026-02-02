@@ -25,6 +25,7 @@ export class ParticleField {
 		canvas.style.inset = "0";
 		canvas.style.width = "100%";
 		canvas.style.height = "100%";
+		canvas.style.zIndex = "0";
 		canvas.style.pointerEvents = "none";
 		canvas.style.borderRadius = "16px";
 
@@ -41,6 +42,7 @@ export class ParticleField {
 
 		this.material = new THREE.ShaderMaterial({
 			transparent: true,
+			blending: THREE.AdditiveBlending,
 			depthTest: false,
 			depthWrite: false,
 			uniforms: {
@@ -93,7 +95,10 @@ export class ParticleField {
 					// ripple signal
 					float ripple = 0.0;
 					for(int i=0;i<8;i++){
-						if(i>=uRippleCount) break;
+						if(i >= uRippleCount) {
+							// WebGL1 drivers may not like dynamic breaks; keep branch but no break.
+						}
+						if(i >= uRippleCount) continue;
 						float t = uTime - uRippleStart[i];
 						if(t < 0.0) continue;
 						float d = distance(vec2(x,y), uRipplePos[i]);
@@ -136,7 +141,7 @@ export class ParticleField {
 					float glow = clamp(vRipple, 0.0, 0.9);
 					vec3 color = mix(base, vec3(1.0), glow * 0.25);
 
-					float alpha = vMask * soft * (0.10 + glow * 0.10);
+					float alpha = vMask * soft * (0.22 + glow * 0.18);
 					gl_FragColor = vec4(color, alpha);
 				}
 			`,
@@ -145,6 +150,7 @@ export class ParticleField {
 		const geometry = new THREE.BufferGeometry();
 		geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(3), 3));
 		this.points = new THREE.Points(geometry, this.material);
+		this.points.frustumCulled = false;
 		this.scene.add(this.points);
 
 		this.resize();
