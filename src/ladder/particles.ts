@@ -90,6 +90,10 @@ export class ParticleField {
 					float maskA = intervalMask(x, uMidX, uBallAx);
 					float maskB = intervalMask(x, uMidX, uBallBx);
 					vMask = max(maskA, maskB);
+					// if balls are very close to 0, keep a faint center band so the particle system is still visible
+					float moved = abs(uBallAx - uMidX) + abs(uBallBx - uMidX);
+					float centerBand = exp(-abs(x - uMidX) / 110.0) * 0.10;
+					vMask = max(vMask, centerBand * (1.0 - smoothstep(0.0, 10.0, moved)));
 					vSide = step(uMidX, x); // 0: cool, 1: warm
 
 					// ripple signal
@@ -116,7 +120,7 @@ export class ParticleField {
 					float baseSize = 1.7;
 					float sizeJitter = fract(sin(dot(vec2(x,y), vec2(12.9898,78.233))) * 43758.5453);
 					float rippleSize = max(0.0, vRipple) * 1.4;
-					gl_PointSize = (baseSize + sizeJitter * 1.2 + rippleSize) * (uResolution.y / 520.0);
+					gl_PointSize = (baseSize + sizeJitter * 1.2 + rippleSize) * 2.2;
 				}
 			`,
 			fragmentShader: `
@@ -141,7 +145,7 @@ export class ParticleField {
 					float glow = clamp(vRipple, 0.0, 0.9);
 					vec3 color = mix(base, vec3(1.0), glow * 0.25);
 
-					float alpha = vMask * soft * (0.22 + glow * 0.18);
+					float alpha = vMask * soft * (0.34 + glow * 0.22);
 					gl_FragColor = vec4(color, alpha);
 				}
 			`,
@@ -197,8 +201,8 @@ export class ParticleField {
 	}
 
 	private rebuildParticles() {
-		// density tuned for iPad: ~12k-18k points
-		const spacing = Math.max(10, Math.round(Math.min(this.width, this.height) / 26));
+		// density tuned for iPad: aim for a few thousand points (visible but cheap)
+		const spacing = clampInt(Math.round(Math.min(this.width, this.height) / 42), 6, 14);
 		const xs = Math.floor(this.width / spacing);
 		const ys = Math.floor(this.height / spacing);
 		const count = Math.max(1, xs * ys);
@@ -252,4 +256,8 @@ export class ParticleField {
 		this.points.geometry.dispose();
 		this.material.dispose();
 	}
+}
+
+function clampInt(value: number, min: number, max: number) {
+	return Math.min(Math.max(value, min), max);
 }
