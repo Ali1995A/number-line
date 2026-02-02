@@ -8,6 +8,7 @@ import {
 	pow10BigInt,
 } from "./ladder/format";
 import { DiscreteStepper } from "./ladder/stepper";
+import { ParticleField } from "./ladder/particles";
 
 type State = {
 	k: number;
@@ -37,6 +38,8 @@ const segSymmetric = mustGetEl("#seg-symmetric") as HTMLButtonElement;
 const segIndependent = mustGetEl("#seg-independent") as HTMLButtonElement;
 
 let engine: LadderEngine | null = null;
+const particles = new ParticleField(axis);
+const axisOverlay = ensureAxisOverlay(axis);
 
 const state: State = {
 	k: 0,
@@ -115,6 +118,7 @@ function bumpK(delta: number) {
 function render() {
 	const rect = axis.getBoundingClientRect();
 	const width = rect.width;
+	const height = rect.height;
 	if (!engine || engine.k !== state.k || Math.abs(engine.width - width) > 0.5) {
 		engine = createLadderEngine(state.k, width);
 	}
@@ -128,17 +132,24 @@ function render() {
 	rangeLabelEl.textContent = `${formatRangeLabel(state.k)}`;
 	currentValueEl.textContent = formatValueBanner();
 
-	axis.innerHTML = "";
-	axis.appendChild(renderAxisBackground(engine.width));
-	axis.appendChild(renderCenterZero(engine.width));
+	axisOverlay.innerHTML = "";
+	axisOverlay.appendChild(renderAxisBackground(engine.width));
+	axisOverlay.appendChild(renderCenterZero(engine.width));
 
 	const ball = computeBallPositions(engine);
-	axis.appendChild(renderValueFill(engine.width, ball.xA, Math.sign(state.valueA) || 0, "a"));
-	axis.appendChild(renderValueFill(engine.width, ball.xB, Math.sign(state.valueB) || 0, "b"));
+	particles.setMask({
+		width: engine.width,
+		height,
+		midX: engine.width / 2,
+		ballAx: ball.xA,
+		ballBx: ball.xB,
+	});
 
 	const vm = engine.numberLine.buildViewModel(engine.width);
 	for (const t of vm.tickMarks) {
-		axis.appendChild(renderTick(t.position, classifyTickHeight(t.height, engine.numberLine.biggestTickPatternValue)));
+		axisOverlay.appendChild(
+			renderTick(t.position, classifyTickHeight(t.height, engine.numberLine.biggestTickPatternValue)),
+		);
 	}
 
 	const labelsOpacity = ball.labelsOpacity;
@@ -150,8 +161,8 @@ function render() {
 	renderTickLabels(vm, labelsOpacity.to, state.k);
 
 	const { xA, xB } = ball;
-	axis.appendChild(renderBall(xA, "a", labelsOpacity.from, labelsOpacity.to));
-	axis.appendChild(renderBall(xB, "b", labelsOpacity.from, labelsOpacity.to));
+	axisOverlay.appendChild(renderBall(xA, "a", labelsOpacity.from, labelsOpacity.to));
+	axisOverlay.appendChild(renderBall(xB, "b", labelsOpacity.from, labelsOpacity.to));
 
 	// continue animation frames if needed
 	if (transition) requestAnimationFrame(render);
@@ -196,32 +207,6 @@ function renderAxisBackground(width: number): HTMLElement {
 
 	bg.append(left, right);
 	return bg;
-}
-
-function renderValueFill(width: number, ballX: number, sign: -1 | 0 | 1, which: "a" | "b"): HTMLElement {
-	const mid = width / 2;
-	const start = Math.min(mid, ballX);
-	const end = Math.max(mid, ballX);
-	const w = Math.max(0, end - start);
-
-	const el = document.createElement("div");
-	el.className = "absolute inset-y-0 pointer-events-none";
-	el.style.left = `${start}px`;
-	el.style.width = `${w}px`;
-
-	if (w < 1 || sign === 0) {
-		el.style.width = "0px";
-		return el;
-	}
-
-	const cool = { a: "rgba(59,130,246,0.22)", b: "rgba(37,99,235,0.18)" };
-	const warm = { a: "rgba(249,115,22,0.22)", b: "rgba(234,88,12,0.18)" };
-	const palette = sign < 0 ? cool : warm;
-	const c = which === "a" ? palette.a : palette.b;
-	const dir = ballX >= mid ? "to right" : "to left";
-	el.style.background = `linear-gradient(${dir}, ${c}, rgba(255,255,255,0))`;
-	el.style.borderRadius = "14px";
-	return el;
 }
 
 function renderCenterZero(width: number): HTMLElement {
@@ -278,7 +263,7 @@ function renderTickLabels(
 	if (opacity <= 0) return;
 	for (const t of viewModel.tickMarks) {
 		if (t.label == null) continue;
-		axis.appendChild(renderTickLabel(t.position, formatValue(t.value, state.fullNumber, kForLabels), opacity));
+		axisOverlay.appendChild(renderTickLabel(t.position, formatValue(t.value, state.fullNumber, kForLabels), opacity));
 	}
 }
 
@@ -403,6 +388,10 @@ axis.addEventListener("pointerdown", (e) => {
 	const attr = target?.dataset?.ball as "a" | "b" | undefined;
 	draggingBall = attr ?? pickNearestBall(e.clientX);
 	axis.setPointerCapture(e.pointerId);
+
+	// ripple at touch point + symmetric ripple
+	const rect = axis.getBoundingClientRect();
+	particles.addRipple(clamp(e.clientX - rect.left, 0, rect.width), clamp(e.clientY - rect.top, 0, rect.height));
 });
 
 axis.addEventListener("pointermove", (e) => {
@@ -441,6 +430,11 @@ axis.addEventListener(
 			pinching = false;
 			touchDragging = true;
 			touchDragId = e.touches[0].identifier;
+			const rect = axis.getBoundingClientRect();
+			particles.addRipple(
+				clamp(e.touches[0].clientX - rect.left, 0, rect.width),
+				clamp(e.touches[0].clientY - rect.top, 0, rect.height),
+			);
 		} else if (e.touches.length === 2) {
 			pinching = true;
 			dragging = false;
@@ -512,6 +506,18 @@ function touchDistance(a: Touch, b: Touch) {
 	return Math.hypot(dx, dy);
 }
 
+function ensureAxisOverlay(host: HTMLElement) {
+	let overlay = host.querySelector<HTMLElement>("[data-nl-overlay]");
+	if (overlay) return overlay;
+	overlay = document.createElement("div");
+	overlay.dataset.nlOverlay = "1";
+	overlay.style.position = "absolute";
+	overlay.style.inset = "0";
+	overlay.style.pointerEvents = "auto";
+	host.appendChild(overlay);
+	return overlay;
+}
+
 function pickNearestBall(clientX: number): "a" | "b" {
 	if (!engine) return "a";
 	const rect = axis.getBoundingClientRect();
@@ -554,5 +560,8 @@ function computeBallPositions(eng: LadderEngine) {
 // Initial render + resize handling
 const ro = new ResizeObserver(() => render());
 ro.observe(axis);
+
+const roParticles = new ResizeObserver(() => particles.resize());
+roParticles.observe(axis);
 
 render();
