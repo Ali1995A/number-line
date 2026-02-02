@@ -130,7 +130,7 @@ class Canvas2DImpl {
 		const mask = Math.max(intervalMask(this.midX, this.ballAx), intervalMask(this.midX, this.ballBx));
 		// faint center band so it never looks "broken"
 		const moved = Math.abs(this.ballAx - this.midX) + Math.abs(this.ballBx - this.midX);
-		const band = Math.exp(-Math.abs(x - this.midX) / 120) * 0.10 * (1 - smoothstep(0, 10, moved));
+		const band = Math.exp(-Math.abs(x - this.midX) / 200) * 0.32 * (1 - smoothstep(0, 10, moved));
 		return Math.max(mask, band);
 	}
 
@@ -153,7 +153,7 @@ class Canvas2DImpl {
 				wave += w * env;
 			}
 
-			const baseA = 0.18;
+			const baseA = 0.26;
 			const glow = clamp(Math.abs(wave), 0, 1) * 0.22;
 			let a = mask * (baseA + glow);
 			if (a > 0.5) a = 0.5;
@@ -186,7 +186,7 @@ function makeCanvas() {
 	canvas.style.height = "100%";
 	canvas.style.pointerEvents = "none";
 	canvas.style.zIndex = "1";
-	canvas.style.mixBlendMode = "screen";
+	canvas.style.mixBlendMode = "normal";
 	canvas.style.borderRadius = "16px";
 	return canvas;
 }
@@ -226,10 +226,10 @@ class WebGLPointsImpl {
 
 		const map = makeDotTexture();
 		this.material = new THREE.PointsMaterial({
-			size: 6,
+			size: 10,
 			map,
 			transparent: true,
-			opacity: 0.45, // <= 0.5
+			opacity: 0.5, // <= 0.5
 			vertexColors: true,
 			blending: THREE.AdditiveBlending,
 			depthTest: false,
@@ -316,7 +316,7 @@ class WebGLPointsImpl {
 			const y0 = this.basePositions[i + 1];
 
 			const mask = Math.max(intervalMask(x, this.midX, this.ballAx), intervalMask(x, this.midX, this.ballBx));
-			const band = Math.exp(-Math.abs(x - this.midX) / 120) * 0.10 * (1 - smoothstep(0, 10, moved));
+			const band = Math.exp(-Math.abs(x - this.midX) / 200) * 0.32 * (1 - smoothstep(0, 10, moved));
 			const m = Math.max(mask, band);
 
 			let wave = 0;
@@ -339,10 +339,10 @@ class WebGLPointsImpl {
 
 			const side = x >= this.midX ? 1 : 0;
 			const base = side ? warm : cool;
-			const intensity = m * (0.55 + clamp(Math.abs(wave), 0, 1) * 0.45);
-			this.colors[i] = base.r * intensity;
-			this.colors[i + 1] = base.g * intensity;
-			this.colors[i + 2] = base.b * intensity;
+			const intensity = clamp(0.20 + m * 0.80, 0, 1) * (0.85 + clamp(Math.abs(wave), 0, 1) * 0.35);
+			this.colors[i] = clamp(base.r * intensity, 0, 1);
+			this.colors[i + 1] = clamp(base.g * intensity, 0, 1);
+			this.colors[i + 2] = clamp(base.b * intensity, 0, 1);
 		}
 
 		const geom = this.points.geometry as THREE.BufferGeometry;
