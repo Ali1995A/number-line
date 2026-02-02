@@ -59,6 +59,19 @@
 		@apply inline-flex select-none items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm;
 	}
 
+	.nl-seg {
+		@apply inline-flex overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm;
+	}
+
+	.nl-seg-btn {
+		@apply h-10 px-3 text-sm font-medium text-slate-700;
+		@apply active:bg-slate-50;
+	}
+
+	.nl-seg-btn-active {
+		@apply bg-slate-900 text-white;
+	}
+
 	/* iOS-like switch */
 	.nl-switch {
 		appearance: none;

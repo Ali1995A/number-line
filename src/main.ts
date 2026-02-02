@@ -14,7 +14,9 @@ type State = {
 	targetK: number;
 	stepMode: boolean;
 	fullNumber: boolean;
-	value: number;
+	symmetric: boolean;
+	valueA: number; // left / primary
+	valueB: number; // right / secondary
 };
 
 const K_MIN = 0;
@@ -31,6 +33,8 @@ const btnResetZero = mustGetEl("#btn-reset-zero") as HTMLButtonElement;
 const toggleStepMode = mustGetEl("#toggle-step-mode") as HTMLInputElement;
 const toggleFullNumber = mustGetEl("#toggle-full-number") as HTMLInputElement;
 const inputTargetK = mustGetEl("#input-target-k") as HTMLInputElement;
+const segSymmetric = mustGetEl("#seg-symmetric") as HTMLButtonElement;
+const segIndependent = mustGetEl("#seg-independent") as HTMLButtonElement;
 
 let engine: LadderEngine | null = null;
 
@@ -39,12 +43,52 @@ const state: State = {
 	targetK: 0,
 	stepMode: toggleStepMode.checked,
 	fullNumber: toggleFullNumber.checked,
-	value: 0,
+	symmetric: true,
+	valueA: 0,
+	valueB: 0,
 };
 
+type Transition = {
+	fromK: number;
+	toK: number;
+	startAt: number;
+	durationMs: number;
+	fromEngine: LadderEngine;
+	toEngine: LadderEngine;
+	fromA: number;
+	fromB: number;
+	toA: number;
+	toB: number;
+};
+
+let transition: Transition | null = null;
+
 const stepper = new DiscreteStepper(state.k, (nextK) => {
+	const rect = axis.getBoundingClientRect();
+	const width = rect.width;
+	const fromEngine = createLadderEngine(state.k, width);
+	const toEngine = createLadderEngine(nextK, width);
+
+	const toMax = toEngine.maxAbsValue;
+	const toA = clamp(state.valueA, -toMax, toMax);
+	const toB = state.symmetric ? -toA : clamp(state.valueB, -toMax, toMax);
+
+	transition = {
+		fromK: state.k,
+		toK: nextK,
+		startAt: performance.now(),
+		durationMs: 280,
+		fromEngine,
+		toEngine,
+		fromA: state.valueA,
+		fromB: state.valueB,
+		toA,
+		toB,
+	};
+
 	state.k = nextK;
-	state.value = clamp(state.value, -Math.pow(10, state.k), Math.pow(10, state.k));
+	state.valueA = toA;
+	state.valueB = toB;
 	inputTargetK.value = String(state.k);
 	render();
 });
@@ -76,25 +120,38 @@ function render() {
 	}
 
 	const max = engine.maxAbsValue;
-	state.value = clamp(state.value, -max, max);
+	state.valueA = clamp(state.valueA, -max, max);
+	if (state.symmetric) state.valueB = -state.valueA;
+	else state.valueB = clamp(state.valueB, -max, max);
 
 	scaleLabelEl.textContent = formatScaleLabel(state.k);
 	rangeLabelEl.textContent = `${formatRangeLabel(state.k)}`;
-	currentValueEl.textContent = `当前值：${formatValue(state.value, state.fullNumber, state.k)}`;
+	currentValueEl.textContent = formatValueBanner();
 
 	axis.innerHTML = "";
 	axis.appendChild(renderAxisBackground(engine.width));
 	axis.appendChild(renderCenterZero(engine.width));
 
+	const ball = computeBallPositions(engine);
 	const vm = engine.numberLine.buildViewModel(engine.width);
-	const ticks = getTicksForK(state.k, vm.tickMarks.map((t) => t.position), vm.tickMarks.map((t) => t.height));
-	for (const tick of ticks) {
-		axis.appendChild(renderTick(tick.x, tick.heightClass));
-		axis.appendChild(renderTickLabel(tick.x, tick.label));
+	for (const t of vm.tickMarks) {
+		axis.appendChild(renderTick(t.position, classifyTickHeight(t.height, engine.numberLine.biggestTickPatternValue)));
 	}
 
-	const sliderX = valueToXWithEngine(state.value, engine);
-	axis.appendChild(renderSlider(sliderX));
+	const labelsOpacity = ball.labelsOpacity;
+	if (transition) {
+		// crossfade labels between two k levels for a smoother "梯级变化"感受
+		const fromVm = transition.fromEngine.numberLine.buildViewModel(transition.fromEngine.width);
+		renderTickLabels(fromVm, labelsOpacity.from, transition.fromK);
+	}
+	renderTickLabels(vm, labelsOpacity.to, state.k);
+
+	const { xA, xB } = ball;
+	axis.appendChild(renderBall(xA, "a", labelsOpacity.from, labelsOpacity.to));
+	axis.appendChild(renderBall(xB, "b", labelsOpacity.from, labelsOpacity.to));
+
+	// continue animation frames if needed
+	if (transition) requestAnimationFrame(render);
 }
 
 function formatRangeLabel(k: number): string {
@@ -111,6 +168,13 @@ function formatValue(value: number, full: boolean, k: number): string {
 		return formatFriendlyBigInt(asInt);
 	}
 	return formatFriendlyNumber(value);
+}
+
+function formatValueBanner(): string {
+	const a = formatValue(state.valueA, state.fullNumber, state.k);
+	const b = formatValue(state.valueB, state.fullNumber, state.k);
+	if (state.symmetric) return `当前值：${a}（对称：${b}）`;
+	return `A：${a}　B：${b}`;
 }
 
 function renderAxisBackground(width: number): HTMLElement {
@@ -167,32 +231,73 @@ function renderTick(x: number, heightClass: "tall" | "mid" | "short"): HTMLEleme
 	return tick;
 }
 
-function renderTickLabel(x: number, label: string): HTMLElement {
+function renderTickLabel(x: number, label: string, opacity = 1): HTMLElement {
 	const el = document.createElement("div");
 	el.className =
 		"absolute bottom-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-white/70 px-1.5 py-0.5 text-xs text-slate-700 backdrop-blur";
 	el.style.left = `${x}px`;
 	el.textContent = label;
+	el.style.opacity = String(opacity);
 	return el;
 }
 
-function renderSlider(x: number): HTMLElement {
+function renderTickLabels(
+	viewModel: { tickMarks: Array<{ label: string | null; position: number; value: number }> },
+	opacity: number,
+	kForLabels: number,
+) {
+	if (opacity <= 0) return;
+	for (const t of viewModel.tickMarks) {
+		if (t.label == null) continue;
+		axis.appendChild(renderTickLabel(t.position, formatValue(t.value, state.fullNumber, kForLabels), opacity));
+	}
+}
+
+function renderBall(x: number, which: "a" | "b", fromOpacity: number, toOpacity: number): HTMLElement {
 	const wrap = document.createElement("div");
 	wrap.className = "absolute inset-y-0";
 	wrap.style.left = `${x}px`;
 	wrap.style.width = "0px";
 
+	const color = which === "a" ? { line: "rgba(59,130,246,0.9)", fill: "rgba(191,219,254,1)", border: "rgba(37,99,235,1)" } : { line: "rgba(34,197,94,0.9)", fill: "rgba(187,247,208,1)", border: "rgba(22,163,74,1)" };
+
 	const line = document.createElement("div");
-	line.className = "absolute bottom-10 w-0.5 bg-amber-500";
+	line.className = "absolute bottom-10 w-0.5";
 	line.style.left = "-1px";
-	line.style.height = "56px";
+	line.style.height = "64px";
+	line.style.background = color.line;
+	line.style.opacity = String(toOpacity);
 
 	const knob = document.createElement("div");
-	knob.className =
-		"absolute bottom-10 left-0 -translate-x-1/2 -translate-y-1/2 h-5 w-5 rounded-full border-2 border-amber-600 bg-amber-200 shadow";
-	knob.title = "拖动当前值";
+	knob.className = "absolute bottom-10 left-0 -translate-x-1/2 -translate-y-1/2 shadow";
+	knob.style.width = "26px";
+	knob.style.height = "26px";
+	knob.style.borderRadius = "999px";
+	knob.style.border = `2px solid ${color.border}`;
+	knob.style.background = color.fill;
+	knob.style.opacity = String(toOpacity);
+	knob.dataset.ball = which;
 
-	wrap.append(line, knob);
+	// larger hit target
+	const hit = document.createElement("div");
+	hit.className = "absolute bottom-10 left-0 -translate-x-1/2 -translate-y-1/2";
+	hit.style.width = "44px";
+	hit.style.height = "44px";
+	hit.style.borderRadius = "999px";
+	hit.style.background = "transparent";
+	hit.dataset.ball = which;
+
+	// during k transition, slightly fade the ball if it's clamped
+	const ghost = document.createElement("div");
+	ghost.className = knob.className;
+	ghost.style.width = knob.style.width;
+	ghost.style.height = knob.style.height;
+	ghost.style.borderRadius = knob.style.borderRadius;
+	ghost.style.border = knob.style.border;
+	ghost.style.background = knob.style.background;
+	ghost.style.opacity = String(fromOpacity);
+
+	wrap.append(line, ghost, knob, hit);
 	return wrap;
 }
 
@@ -203,22 +308,11 @@ function valueToXWithEngine(value: number, eng: LadderEngine): number {
 	return value * ratio - eng.numberLine.displacement;
 }
 
-function getTicksForK(k: number, positions: number[], heights: number[]) {
-	const maxNumber = Math.pow(10, k);
-	const halfNumber = k === 0 ? 0.5 : maxNumber / 2;
-
-	const fmt = (v: number) => formatValue(v, state.fullNumber, k);
-	const classify = (h: number) => (h >= 3 ? ("tall" as const) : h === 2 ? ("mid" as const) : ("short" as const));
-	const defaultPositions = [0, 0, 0, 0, 0];
-	const p = positions.length === 5 ? positions : defaultPositions;
-	const hs = heights.length === 5 ? heights : [3, 1, 2, 1, 2];
-	return [
-		{ x: p[0], label: fmt(-maxNumber), heightClass: classify(hs[0]) },
-		{ x: p[1], label: fmt(-halfNumber), heightClass: classify(hs[1]) },
-		{ x: p[2], label: fmt(0), heightClass: classify(hs[2]) },
-		{ x: p[3], label: fmt(halfNumber), heightClass: classify(hs[3]) },
-		{ x: p[4], label: fmt(maxNumber), heightClass: classify(hs[4]) },
-	];
+function classifyTickHeight(height: number, biggest: number): "tall" | "mid" | "short" {
+	const ratio = biggest <= 0 ? 0 : height / biggest;
+	if (ratio >= 0.95) return "tall";
+	if (ratio >= 0.65) return "mid";
+	return "short";
 }
 
 // --- Interactions ---
@@ -226,7 +320,8 @@ function getTicksForK(k: number, positions: number[], heights: number[]) {
 btnZoomIn.addEventListener("click", () => bumpK(+1));
 btnZoomOut.addEventListener("click", () => bumpK(-1));
 btnResetZero.addEventListener("click", () => {
-	state.value = 0;
+	state.valueA = 0;
+	state.valueB = 0;
 	render();
 });
 
@@ -256,13 +351,28 @@ axis.addEventListener(
 	{ passive: false },
 );
 
-// Drag (mouse & iPad single finger): pan current value v.
+function setSymmetricMode(on: boolean) {
+	state.symmetric = on;
+	segSymmetric.classList.toggle("nl-seg-btn-active", on);
+	segIndependent.classList.toggle("nl-seg-btn-active", !on);
+	if (on) state.valueB = -state.valueA;
+	render();
+}
+
+segSymmetric.addEventListener("click", () => setSymmetricMode(true));
+segIndependent.addEventListener("click", () => setSymmetricMode(false));
+
+// Drag balls (mouse & iPad single finger): move values.
 let dragging = false;
 let pinching = false;
+let draggingBall: "a" | "b" | null = null;
 
 axis.addEventListener("pointerdown", (e) => {
 	if (pinching) return;
 	dragging = true;
+	const target = e.target as HTMLElement;
+	const attr = target?.dataset?.ball as "a" | "b" | undefined;
+	draggingBall = attr ?? pickNearestBall(e.clientX);
 	axis.setPointerCapture(e.pointerId);
 });
 
@@ -271,15 +381,24 @@ axis.addEventListener("pointermove", (e) => {
 	const rect = axis.getBoundingClientRect();
 	const x = clamp(e.clientX - rect.left, 0, rect.width);
 	const value = engine.numberLine.valueAt(x);
-	state.value = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
+	if (draggingBall === "b") {
+		if (state.symmetric) state.valueA = clamp(-value, -engine.maxAbsValue, engine.maxAbsValue);
+		else state.valueB = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
+	} else {
+		// default drag A
+		state.valueA = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
+	}
+	if (state.symmetric) state.valueB = -state.valueA;
 	render();
 });
 
 axis.addEventListener("pointerup", () => {
 	dragging = false;
+	draggingBall = null;
 });
 axis.addEventListener("pointercancel", () => {
 	dragging = false;
+	draggingBall = null;
 });
 
 // iPad pinch (Touch Events): snap to k±1 with thresholds.
@@ -314,7 +433,15 @@ axis.addEventListener(
 			const rect = axis.getBoundingClientRect();
 			const x = clamp(t.clientX - rect.left, 0, rect.width);
 			const value = engine.numberLine.valueAt(x);
-			state.value = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
+			// touch drag defaults to nearest ball
+			const chosen = draggingBall ?? pickNearestBall(t.clientX);
+			if (chosen === "b") {
+				if (state.symmetric) state.valueA = clamp(-value, -engine.maxAbsValue, engine.maxAbsValue);
+				else state.valueB = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
+			} else {
+				state.valueA = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
+			}
+			if (state.symmetric) state.valueB = -state.valueA;
 			render();
 			return;
 		}
@@ -340,18 +467,59 @@ axis.addEventListener("touchend", () => {
 	pinching = false;
 	touchDragging = false;
 	touchDragId = null;
+	draggingBall = null;
 });
 axis.addEventListener("touchcancel", () => {
 	pinchStartDist = 0;
 	pinching = false;
 	touchDragging = false;
 	touchDragId = null;
+	draggingBall = null;
 });
 
 function touchDistance(a: Touch, b: Touch) {
 	const dx = a.clientX - b.clientX;
 	const dy = a.clientY - b.clientY;
 	return Math.hypot(dx, dy);
+}
+
+function pickNearestBall(clientX: number): "a" | "b" {
+	if (!engine) return "a";
+	const rect = axis.getBoundingClientRect();
+	const x = clientX - rect.left;
+	const xA = valueToXWithEngine(state.valueA, engine);
+	const xB = valueToXWithEngine(state.valueB, engine);
+	return Math.abs(x - xB) < Math.abs(x - xA) ? "b" : "a";
+}
+
+function computeBallPositions(eng: LadderEngine) {
+	if (!transition) {
+		return {
+			xA: valueToXWithEngine(state.valueA, eng),
+			xB: valueToXWithEngine(state.valueB, eng),
+			labelsOpacity: { from: 0, to: 1 },
+		};
+	}
+	const now = performance.now();
+	const t = clamp((now - transition.startAt) / transition.durationMs, 0, 1);
+	const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+	const xFromA = valueToXWithEngine(transition.fromA, transition.fromEngine);
+	const xToA = valueToXWithEngine(transition.toA, transition.toEngine);
+	const xFromB = valueToXWithEngine(transition.fromB, transition.fromEngine);
+	const xToB = valueToXWithEngine(transition.toB, transition.toEngine);
+
+	const lerp = (a: number, b: number) => a + (b - a) * ease;
+	const xA = lerp(xFromA, xToA);
+	const xB = lerp(xFromB, xToB);
+
+	if (t >= 1) transition = null;
+
+	return {
+		xA,
+		xB,
+		labelsOpacity: { from: 1 - ease, to: ease },
+	};
 }
 
 // Initial render + resize handling

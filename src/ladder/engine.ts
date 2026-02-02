@@ -11,16 +11,22 @@ export interface LadderEngine {
 export function createLadderEngine(k: number, width: number): LadderEngine {
 	const safeWidth = Math.max(1, Math.floor(width));
 	const maxAbsValue = Math.pow(10, k);
-	const unitValue = 2 * maxAbsValue; // value span across the full viewport width
+	const unitValue = maxAbsValue; // one unit == 10^k
 
 	const labelStrategy: ITickMarkLabelStrategy = {
-		labelFor: () => null,
+		labelFor: (value, index) => {
+			// label major + mid ticks (pattern indices 0 and 5 for our default pattern)
+			if (index % 5 === 0) return value.toFixed(k === 0 ? 1 : 0);
+			return null;
+		},
 	};
 
 	const options: INumberLineOptions = {
-		pattern: [3, 1, 2, 1], // 5 ticks across width (start, quarter, mid, 3/4, end)
-		breakpointLowerbound: safeWidth,
-		breakpointUpperBound: safeWidth,
+		// classic: major at 0, mid at 5, minors elsewhere
+		pattern: [3, 1, 1, 1, 1, 2, 1, 1, 1, 1],
+		// lock unitLength so pixel spacing stays stable; show [-10^k, +10^k] across full width
+		breakpointLowerbound: safeWidth / 2,
+		breakpointUpperBound: safeWidth / 2,
 		zoomPeriod: 1,
 		zoomFactor: unitValue,
 		labelStrategy,
@@ -29,7 +35,7 @@ export function createLadderEngine(k: number, width: number): LadderEngine {
 	};
 
 	const numberLine = new NumberLine(options);
-	// keep 0 centered: valueAt(width/2) == 0
+	// Map values exactly: x=0 => -10^k, x=width/2 => 0, x=width => +10^k
 	numberLine.panTo(-safeWidth / 2);
 
 	return {
@@ -40,4 +46,3 @@ export function createLadderEngine(k: number, width: number): LadderEngine {
 		unitValue,
 	};
 }
-
