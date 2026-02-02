@@ -26,6 +26,7 @@ export class ParticleField {
 		canvas.style.width = "100%";
 		canvas.style.height = "100%";
 		canvas.style.zIndex = "0";
+		canvas.style.mixBlendMode = "screen";
 		canvas.style.pointerEvents = "none";
 		canvas.style.borderRadius = "16px";
 
@@ -66,8 +67,6 @@ export class ParticleField {
 				uniform vec2 uRipplePos[8];
 				uniform float uRippleStart[8];
 				uniform int uRippleCount;
-
-				attribute vec3 position;
 
 				varying float vMask;
 				varying float vSide;
