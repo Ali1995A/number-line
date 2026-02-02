@@ -198,12 +198,12 @@ function renderAxisBackground(width: number): HTMLElement {
 	const left = document.createElement("div");
 	left.className = "absolute inset-y-0 left-0";
 	left.style.width = `${width / 2}px`;
-	left.style.background = "rgba(59, 130, 246, 0.06)"; // cool (negative)
+	left.style.background = "rgba(139, 92, 246, 0.07)"; // violet (negative)
 
 	const right = document.createElement("div");
 	right.className = "absolute inset-y-0 right-0";
 	right.style.width = `${width / 2}px`;
-	right.style.background = "rgba(249, 115, 22, 0.06)"; // warm (positive)
+	right.style.background = "rgba(236, 72, 153, 0.07)"; // pink (positive)
 
 	bg.append(left, right);
 	return bg;
@@ -280,7 +280,10 @@ function renderBall(x: number, which: "a" | "b", fromOpacity: number, toOpacity:
 	wrap.style.left = `${x}px`;
 	wrap.style.width = "0px";
 
-	const color = which === "a" ? { line: "rgba(59,130,246,0.9)", fill: "rgba(191,219,254,1)", border: "rgba(37,99,235,1)" } : { line: "rgba(34,197,94,0.9)", fill: "rgba(187,247,208,1)", border: "rgba(22,163,74,1)" };
+	const color =
+		which === "a"
+			? { line: "rgba(236,72,153,0.92)", fill: "rgba(251,207,232,1)", border: "rgba(219,39,119,1)" }
+			: { line: "rgba(139,92,246,0.92)", fill: "rgba(221,214,254,1)", border: "rgba(109,40,217,1)" };
 
 	const line = document.createElement("div");
 	line.className = "absolute bottom-10 w-0.5";

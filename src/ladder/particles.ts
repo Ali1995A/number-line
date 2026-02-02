@@ -49,8 +49,8 @@ export class ParticleField {
 				uMidX: { value: 0.5 },
 				uBallAx: { value: 0.5 },
 				uBallBx: { value: 0.5 },
-				uCool: { value: new THREE.Color("#3B82F6") },
-				uWarm: { value: new THREE.Color("#F97316") },
+				uCool: { value: new THREE.Color("#8B5CF6") }, // violet
+				uWarm: { value: new THREE.Color("#EC4899") }, // pink
 				uRipplePos: { value: Array.from({ length: 8 }, () => new THREE.Vector2(-9999, -9999)) },
 				uRippleStart: { value: new Float32Array(8) },
 				uRippleCount: { value: 0 },
@@ -247,4 +247,3 @@ export class ParticleField {
 		this.material.dispose();
 	}
 }
-

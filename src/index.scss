@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+	/* Pink iOS-ish palette */
+	--nl-pink: 236 72 153; /* pink-500 */
+	--nl-pink-dark: 219 39 119; /* pink-600 */
+	--nl-violet: 139 92 246; /* violet-500 */
+	--nl-rose-bg: 255 241 242; /* rose-50 */
+	--nl-surface: 255 255 255;
+	--nl-border: 244 114 182; /* pink-400-ish */
+	--nl-axis-h: clamp(260px, 46vh, 440px);
+}
+
 .nl-topbar {
 	padding-top: env(safe-area-inset-top);
 }
@@ -28,6 +39,12 @@
 		font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto,
 			"Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
 	}
+
+	body {
+		background: radial-gradient(1200px 800px at 20% 0%, rgba(var(--nl-pink), 0.10), transparent 55%),
+			radial-gradient(900px 700px at 80% 20%, rgba(var(--nl-violet), 0.10), transparent 50%),
+			rgb(var(--nl-rose-bg));
+	}
 }
 
 @layer components {
@@ -36,7 +53,10 @@
 	}
 
 	.nl-card {
-		@apply rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm;
+		border: 1px solid rgba(var(--nl-border), 0.35);
+		background: rgba(var(--nl-surface), 0.92);
+		box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(236, 72, 153, 0.08);
+		@apply rounded-2xl px-4 py-3;
 	}
 
 	.nl-axis-card {
@@ -50,26 +70,38 @@
 	}
 
 	.nl-btn {
-		@apply inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 shadow-sm;
-		@apply active:scale-[0.98] active:bg-slate-50;
+		border: 1px solid rgba(var(--nl-border), 0.35);
+		background: rgba(var(--nl-surface), 0.94);
+		color: rgb(51, 65, 85);
+		box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
+		@apply inline-flex h-10 items-center justify-center rounded-xl px-3 text-sm font-medium;
+		@apply active:scale-[0.98];
 	}
 
 	.nl-btn-primary {
-		@apply border-slate-900 bg-slate-900 text-white;
-		@apply active:bg-slate-800;
+		border: 1px solid rgba(var(--nl-pink-dark), 0.55);
+		background: linear-gradient(180deg, rgba(var(--nl-pink), 1) 0%, rgba(var(--nl-pink-dark), 1) 100%);
+		color: white;
 	}
 
 	.nl-input {
-		@apply h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 shadow-sm outline-none;
-		@apply focus:border-slate-400;
+		border: 1px solid rgba(var(--nl-border), 0.35);
+		background: rgba(var(--nl-surface), 0.92);
+		@apply h-10 rounded-xl px-3 text-sm text-slate-900 shadow-sm outline-none;
+		@apply focus:ring-2;
+		box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04);
 	}
 
 	.nl-toggle {
-		@apply inline-flex select-none items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm;
+		border: 1px solid rgba(var(--nl-border), 0.35);
+		background: rgba(var(--nl-surface), 0.92);
+		@apply inline-flex select-none items-center gap-2 rounded-xl px-3 py-2 shadow-sm;
 	}
 
 	.nl-seg {
-		@apply inline-flex overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm;
+		border: 1px solid rgba(var(--nl-border), 0.35);
+		background: rgba(var(--nl-surface), 0.92);
+		@apply inline-flex overflow-hidden rounded-xl shadow-sm;
 	}
 
 	.nl-seg-btn {
@@ -78,7 +110,8 @@
 	}
 
 	.nl-seg-btn-active {
-		@apply bg-slate-900 text-white;
+		background: linear-gradient(180deg, rgba(var(--nl-pink), 1) 0%, rgba(var(--nl-pink-dark), 1) 100%);
+		color: white;
 	}
 
 	/* iOS-like switch */
@@ -107,17 +140,12 @@
 	}
 
 	.nl-switch:checked {
-		background: rgba(34, 197, 94, 0.85);
+		background: rgba(var(--nl-pink), 0.90);
 	}
 
 	.nl-switch:checked::after {
 		transform: translateX(18px);
 	}
-}
-
-:root {
-	/* Default: big but balanced */
-	--nl-axis-h: clamp(260px, 46vh, 440px);
 }
 
 @media (min-width: 768px) and (orientation: landscape) {
