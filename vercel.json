@@ -1,13 +1,6 @@
 {
 	"version": 2,
-	"builds": [
-		{
-			"src": "package.json",
-			"use": "@vercel/static-build",
-			"config": {
-				"distDir": "site-dist"
-			}
-		}
-	]
+	"installCommand": "npm ci",
+	"buildCommand": "npm run vercel-build",
+	"outputDirectory": "site-dist"
 }
-
