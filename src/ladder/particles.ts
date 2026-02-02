@@ -2,7 +2,7 @@ import * as THREE from "three";
 
 type Ripple = { x: number; y: number; start: number };
 
-export class ParticleField {
+export class ParticleRipples {
 	private renderer: THREE.WebGLRenderer;
 	private scene: THREE.Scene;
 	private camera: THREE.OrthographicCamera;
@@ -14,26 +14,31 @@ export class ParticleField {
 
 	private width = 1;
 	private height = 1;
-	private midX = 0.5;
-	private ballAx = 0.5;
-	private ballBx = 0.5;
 
-	constructor(private host: HTMLElement) {
+	constructor(
+		private host: HTMLElement,
+		private beforeEl?: Element,
+	) {
 		const canvas = document.createElement("canvas");
 		canvas.className = "nl-particles";
 		canvas.style.position = "absolute";
 		canvas.style.inset = "0";
 		canvas.style.width = "100%";
 		canvas.style.height = "100%";
-		canvas.style.zIndex = "0";
-		canvas.style.mixBlendMode = "screen";
 		canvas.style.pointerEvents = "none";
+		canvas.style.zIndex = "1";
+		canvas.style.mixBlendMode = "screen";
 		canvas.style.borderRadius = "16px";
 
-		// insert as first child so DOM ticks/balls render above it
-		host.prepend(canvas);
+		if (this.beforeEl) host.insertBefore(canvas, this.beforeEl);
+		else host.appendChild(canvas);
 
-		this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+		this.renderer = new THREE.WebGLRenderer({
+			canvas,
+			alpha: true,
+			antialias: true,
+			powerPreference: "low-power",
+		});
 		this.renderer.setClearColor(0x000000, 0);
 		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
@@ -59,6 +64,8 @@ export class ParticleField {
 				uRippleCount: { value: 0 },
 			},
 			vertexShader: `
+				precision mediump float;
+
 				uniform vec2 uResolution;
 				uniform float uTime;
 				uniform float uMidX;
@@ -70,13 +77,16 @@ export class ParticleField {
 
 				varying float vMask;
 				varying float vSide;
-				varying float vRipple;
+				varying float vWave;
+
+				float hash(vec2 p) {
+					return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+				}
 
 				float intervalMask(float x, float a, float b) {
 					float lo = min(a, b);
 					float hi = max(a, b);
-					// soft edges: 10px fade
-					float edge = 10.0;
+					float edge = 14.0;
 					float m1 = smoothstep(lo, lo + edge, x);
 					float m2 = 1.0 - smoothstep(hi - edge, hi, x);
 					return m1 * m2;
@@ -88,63 +98,71 @@ export class ParticleField {
 
 					float maskA = intervalMask(x, uMidX, uBallAx);
 					float maskB = intervalMask(x, uMidX, uBallBx);
-					vMask = max(maskA, maskB);
-					// if balls are very close to 0, keep a faint center band so the particle system is still visible
-					float moved = abs(uBallAx - uMidX) + abs(uBallBx - uMidX);
-					float centerBand = exp(-abs(x - uMidX) / 110.0) * 0.10;
-					vMask = max(vMask, centerBand * (1.0 - smoothstep(0.0, 10.0, moved)));
-					vSide = step(uMidX, x); // 0: cool, 1: warm
+					float mask = max(maskA, maskB);
+					vMask = mask;
+					vSide = step(uMidX, x); // 0 violet(neg), 1 pink(pos)
 
-					// ripple signal
-					float ripple = 0.0;
-					for(int i=0;i<8;i++){
-						if(i >= uRippleCount) {
-							// WebGL1 drivers may not like dynamic breaks; keep branch but no break.
+					// wave accumulator (no dynamic break for WebGL1 compatibility)
+					float w = 0.0;
+					for (int i = 0; i < 8; i++) {
+						if (i >= uRippleCount) {
+							// keep loop, just skip
 						}
-						if(i >= uRippleCount) continue;
-						float t = uTime - uRippleStart[i];
-						if(t < 0.0) continue;
-						float d = distance(vec2(x,y), uRipplePos[i]);
-						float wave = sin(d * 0.085 - t * 6.0);
-						float env = exp(-t * 1.6) * exp(-d * 0.015);
-						ripple += wave * env;
-					}
-					vRipple = ripple;
+						if (i >= uRippleCount) continue;
 
-					// to clip space (pixel coords -> NDC)
-					float ndcX = (x / uResolution.x) * 2.0 - 1.0;
-					float ndcY = 1.0 - (y / uResolution.y) * 2.0;
+						float t = uTime - uRippleStart[i];
+						if (t < 0.0) continue;
+
+						vec2 rp = uRipplePos[i];
+						float d = distance(vec2(x, y), rp);
+						// radial ripple
+						float wave = sin(d * 0.10 - t * 7.0);
+						float env = exp(-t * 1.35) * exp(-d * 0.020);
+						w += wave * env;
+					}
+					vWave = w;
+
+					// subtle jitter to avoid rigid grid
+					float jx = (hash(vec2(x, y)) - 0.5) * 0.8;
+					float jy = (hash(vec2(y, x)) - 0.5) * 0.8;
+
+					float amp = clamp(abs(vWave), 0.0, 1.0) * 4.0;
+					float yy = y + jy + vWave * amp;
+					float xx = x + jx;
+
+					float ndcX = (xx / uResolution.x) * 2.0 - 1.0;
+					float ndcY = 1.0 - (yy / uResolution.y) * 2.0;
 					gl_Position = vec4(ndcX, ndcY, 0.0, 1.0);
 
-					float baseSize = 1.7;
-					float sizeJitter = fract(sin(dot(vec2(x,y), vec2(12.9898,78.233))) * 43758.5453);
-					float rippleSize = max(0.0, vRipple) * 1.4;
-					gl_PointSize = (baseSize + sizeJitter * 1.2 + rippleSize) * 2.2;
+					float base = 2.2 + hash(vec2(x, y)) * 1.3;
+					float bump = clamp(vWave, 0.0, 1.0) * 2.0;
+					gl_PointSize = (base + bump) * 1.6;
 				}
 			`,
 			fragmentShader: `
-				precision highp float;
+				precision mediump float;
 
 				uniform vec3 uCool;
 				uniform vec3 uWarm;
 
 				varying float vMask;
 				varying float vSide;
-				varying float vRipple;
+				varying float vWave;
 
 				void main() {
-					// round point
-					vec2 p = gl_PointCoord.xy * 2.0 - 1.0;
-					float r2 = dot(p,p);
-					if(r2 > 1.0) discard;
+					vec2 p = gl_PointCoord * 2.0 - 1.0;
+					float r2 = dot(p, p);
+					if (r2 > 1.0) discard;
+
 					float soft = smoothstep(1.0, 0.0, r2);
-
 					vec3 base = mix(uCool, uWarm, vSide);
-					// ripple brightens slightly
-					float glow = clamp(vRipple, 0.0, 0.9);
-					vec3 color = mix(base, vec3(1.0), glow * 0.25);
 
-					float alpha = vMask * soft * (0.34 + glow * 0.22);
+					float w = clamp(vWave * 0.6, -1.0, 1.0);
+					vec3 color = base + vec3(max(0.0, w)) * 0.10;
+
+					// IMPORTANT: alpha must not exceed 0.5
+					float alpha = vMask * soft * (0.22 + clamp(abs(vWave), 0.0, 1.0) * 0.18);
+					alpha = clamp(alpha, 0.0, 0.5);
 					gl_FragColor = vec4(color, alpha);
 				}
 			`,
@@ -163,12 +181,9 @@ export class ParticleField {
 	setMask(params: { width: number; height: number; midX: number; ballAx: number; ballBx: number }) {
 		this.width = Math.max(1, Math.floor(params.width));
 		this.height = Math.max(1, Math.floor(params.height));
-		this.midX = params.midX;
-		this.ballAx = params.ballAx;
-		this.ballBx = params.ballBx;
-		this.material.uniforms.uMidX.value = this.midX;
-		this.material.uniforms.uBallAx.value = this.ballAx;
-		this.material.uniforms.uBallBx.value = this.ballBx;
+		this.material.uniforms.uMidX.value = params.midX;
+		this.material.uniforms.uBallAx.value = params.ballAx;
+		this.material.uniforms.uBallBx.value = params.ballBx;
 	}
 
 	addRipple(x: number, y: number) {
@@ -178,18 +193,13 @@ export class ParticleField {
 		this.pushRipple({ x: this.width - x, y, start: now });
 	}
 
-	private pushRipple(r: Ripple) {
-		this.ripples.push(r);
-		// keep last 8
-		if (this.ripples.length > 8) this.ripples.splice(0, this.ripples.length - 8);
-	}
-
 	resize() {
 		const rect = this.host.getBoundingClientRect();
 		this.width = Math.max(1, Math.floor(rect.width));
 		this.height = Math.max(1, Math.floor(rect.height));
 		this.renderer.setSize(this.width, this.height, false);
 		this.material.uniforms.uResolution.value.set(this.width, this.height);
+
 		this.camera.left = 0;
 		this.camera.right = this.width;
 		this.camera.top = 0;
@@ -199,25 +209,13 @@ export class ParticleField {
 		this.rebuildParticles();
 	}
 
-	private rebuildParticles() {
-		// density tuned for iPad: aim for a few thousand points (visible but cheap)
-		const spacing = clampInt(Math.round(Math.min(this.width, this.height) / 42), 6, 14);
-		const xs = Math.floor(this.width / spacing);
-		const ys = Math.floor(this.height / spacing);
-		const count = Math.max(1, xs * ys);
-		const arr = new Float32Array(count * 3);
-		let i = 0;
-		for (let y = 0; y < ys; y++) {
-			for (let x = 0; x < xs; x++) {
-				const px = x * spacing + (spacing * 0.5);
-				const py = y * spacing + (spacing * 0.5);
-				arr[i++] = px;
-				arr[i++] = py;
-				arr[i++] = 0;
-			}
-		}
-		this.points.geometry.setAttribute("position", new THREE.BufferAttribute(arr, 3));
-		this.points.geometry.computeBoundingSphere();
+	destroy() {
+		this.destroyed = true;
+		if (this.rafId != null) cancelAnimationFrame(this.rafId);
+		this.rafId = null;
+		this.renderer.dispose();
+		this.points.geometry.dispose();
+		this.material.dispose();
 	}
 
 	private start() {
@@ -226,8 +224,10 @@ export class ParticleField {
 			const t = performance.now() / 1000;
 			this.material.uniforms.uTime.value = t;
 
-			// prune old ripples
-			this.ripples = this.ripples.filter((r) => t - r.start < 1.8);
+			// keep last 8 ripples, and drop older than 2s
+			this.ripples = this.ripples.filter((r) => t - r.start < 2.0);
+			if (this.ripples.length > 8) this.ripples.splice(0, this.ripples.length - 8);
+
 			this.material.uniforms.uRippleCount.value = this.ripples.length;
 			const pos = this.material.uniforms.uRipplePos.value as THREE.Vector2[];
 			const start = this.material.uniforms.uRippleStart.value as Float32Array;
@@ -247,16 +247,34 @@ export class ParticleField {
 		this.rafId = requestAnimationFrame(loop);
 	}
 
-	destroy() {
-		this.destroyed = true;
-		if (this.rafId != null) cancelAnimationFrame(this.rafId);
-		this.rafId = null;
-		this.renderer.dispose();
-		this.points.geometry.dispose();
-		this.material.dispose();
+	private rebuildParticles() {
+		// Keep it visible and cheap on iPad: a few thousand points
+		const spacing = clampInt(Math.round(Math.min(this.width, this.height) / 36), 7, 14);
+		const xs = Math.max(1, Math.floor(this.width / spacing));
+		const ys = Math.max(1, Math.floor(this.height / spacing));
+		const count = xs * ys;
+
+		const arr = new Float32Array(count * 3);
+		let i = 0;
+		for (let y = 0; y < ys; y++) {
+			for (let x = 0; x < xs; x++) {
+				const px = x * spacing + spacing * 0.5;
+				const py = y * spacing + spacing * 0.5;
+				arr[i++] = px;
+				arr[i++] = py;
+				arr[i++] = 0;
+			}
+		}
+		this.points.geometry.setAttribute("position", new THREE.BufferAttribute(arr, 3));
+		this.points.geometry.computeBoundingSphere();
+	}
+
+	private pushRipple(r: Ripple) {
+		this.ripples.push(r);
 	}
 }
 
 function clampInt(value: number, min: number, max: number) {
 	return Math.min(Math.max(value, min), max);
 }
+

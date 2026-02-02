@@ -8,7 +8,7 @@ import {
 	pow10BigInt,
 } from "./ladder/format";
 import { DiscreteStepper } from "./ladder/stepper";
-import { ParticleField } from "./ladder/particles";
+import { ParticleRipples } from "./ladder/particles";
 
 type State = {
 	k: number;
@@ -38,8 +38,8 @@ const segSymmetric = mustGetEl("#seg-symmetric") as HTMLButtonElement;
 const segIndependent = mustGetEl("#seg-independent") as HTMLButtonElement;
 
 let engine: LadderEngine | null = null;
-const particles = new ParticleField(axis);
-const axisOverlay = ensureAxisOverlay(axis);
+const layers = ensureAxisLayers(axis);
+const particles = new ParticleRipples(axis, layers.overlay);
 
 const state: State = {
 	k: 0,
@@ -132,9 +132,10 @@ function render() {
 	rangeLabelEl.textContent = `${formatRangeLabel(state.k)}`;
 	currentValueEl.textContent = formatValueBanner();
 
-	axisOverlay.innerHTML = "";
-	axisOverlay.appendChild(renderAxisBackground(engine.width));
-	axisOverlay.appendChild(renderCenterZero(engine.width));
+	layers.bg.innerHTML = "";
+	layers.overlay.innerHTML = "";
+	layers.bg.appendChild(renderAxisBackground(engine.width));
+	layers.overlay.appendChild(renderCenterZero(engine.width));
 
 	const ball = computeBallPositions(engine);
 	particles.setMask({
@@ -147,7 +148,7 @@ function render() {
 
 	const vm = engine.numberLine.buildViewModel(engine.width);
 	for (const t of vm.tickMarks) {
-		axisOverlay.appendChild(
+		layers.overlay.appendChild(
 			renderTick(t.position, classifyTickHeight(t.height, engine.numberLine.biggestTickPatternValue)),
 		);
 	}
@@ -161,8 +162,8 @@ function render() {
 	renderTickLabels(vm, labelsOpacity.to, state.k);
 
 	const { xA, xB } = ball;
-	axisOverlay.appendChild(renderBall(xA, "a", labelsOpacity.from, labelsOpacity.to));
-	axisOverlay.appendChild(renderBall(xB, "b", labelsOpacity.from, labelsOpacity.to));
+	layers.overlay.appendChild(renderBall(xA, "a", labelsOpacity.from, labelsOpacity.to));
+	layers.overlay.appendChild(renderBall(xB, "b", labelsOpacity.from, labelsOpacity.to));
 
 	// continue animation frames if needed
 	if (transition) requestAnimationFrame(render);
@@ -270,7 +271,7 @@ function renderTickLabels(
 	if (opacity <= 0) return;
 	for (const t of viewModel.tickMarks) {
 		if (t.label == null) continue;
-		axisOverlay.appendChild(renderTickLabel(t.position, formatValue(t.value, state.fullNumber, kForLabels), opacity));
+		layers.overlay.appendChild(renderTickLabel(t.position, formatValue(t.value, state.fullNumber, kForLabels), opacity));
 	}
 }
 
@@ -516,17 +517,29 @@ function touchDistance(a: Touch, b: Touch) {
 	return Math.hypot(dx, dy);
 }
 
-function ensureAxisOverlay(host: HTMLElement) {
+function ensureAxisLayers(host: HTMLElement) {
+	let bg = host.querySelector<HTMLElement>("[data-nl-bg]");
 	let overlay = host.querySelector<HTMLElement>("[data-nl-overlay]");
-	if (overlay) return overlay;
+	if (bg && overlay) return { bg, overlay };
+
+	bg = document.createElement("div");
+	bg.dataset.nlBg = "1";
+	bg.style.position = "absolute";
+	bg.style.inset = "0";
+	bg.style.pointerEvents = "none";
+	bg.style.zIndex = "0";
+
 	overlay = document.createElement("div");
 	overlay.dataset.nlOverlay = "1";
 	overlay.style.position = "absolute";
 	overlay.style.inset = "0";
 	overlay.style.pointerEvents = "auto";
-	overlay.style.zIndex = "1";
+	overlay.style.zIndex = "2";
+
+	// ensure order: bg (0) -> particles canvas (1) -> overlay (2)
+	host.appendChild(bg);
 	host.appendChild(overlay);
-	return overlay;
+	return { bg, overlay };
 }
 
 function pickNearestBall(clientX: number): "a" | "b" {
