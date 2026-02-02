@@ -1,22 +1,24 @@
 import * as THREE from "three";
 
 type Ripple = { x: number; y: number; start: number };
+type MaskParams = { width: number; height: number; midX: number; ballAx: number; ballBx: number };
 
 export class ParticleRipples {
-	private impl: WebGLImpl | Canvas2DImpl;
+	private impl: WebGLPointsImpl | Canvas2DImpl;
 
-	constructor(
-		private host: HTMLElement,
-		private beforeEl?: Element,
-	) {
-		try {
-			this.impl = new WebGLImpl(host, beforeEl);
-		} catch {
-			this.impl = new Canvas2DImpl(host, beforeEl);
+	constructor(private host: HTMLElement, private beforeEl?: Element) {
+		if (canUseWebGL()) {
+			try {
+				this.impl = new WebGLPointsImpl(host, beforeEl);
+				return;
+			} catch {
+				// fall through to 2D
+			}
 		}
+		this.impl = new Canvas2DImpl(host, beforeEl);
 	}
 
-	setMask(params: { width: number; height: number; midX: number; ballAx: number; ballBx: number }) {
+	setMask(params: MaskParams) {
 		this.impl.setMask(params);
 	}
 
@@ -30,129 +32,6 @@ export class ParticleRipples {
 
 	destroy() {
 		this.impl.destroy();
-	}
-}
-
-function clampInt(value: number, min: number, max: number) {
-	return Math.min(Math.max(value, min), max);
-}
-
-type MaskParams = { width: number; height: number; midX: number; ballAx: number; ballBx: number };
-
-class WebGLImpl {
-	private renderer: THREE.WebGLRenderer;
-	private scene: THREE.Scene;
-	private camera: THREE.OrthographicCamera;
-	private material: THREE.ShaderMaterial;
-	private points: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
-	private ripples: Ripple[] = [];
-	private rafId: number | null = null;
-	private destroyed = false;
-	private width = 1;
-	private height = 1;
-
-	constructor(private host: HTMLElement, private beforeEl?: Element) {
-		const canvas = makeCanvas();
-		if (this.beforeEl) host.insertBefore(canvas, this.beforeEl);
-		else host.appendChild(canvas);
-
-		this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: "low-power" });
-		this.renderer.setClearColor(0x000000, 0);
-		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-
-		this.scene = new THREE.Scene();
-		this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -10, 10);
-		this.camera.position.set(0, 0, 1);
-
-		this.material = makeShaderMaterial();
-		const geometry = new THREE.BufferGeometry();
-		geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(3), 3));
-		this.points = new THREE.Points(geometry, this.material);
-		this.points.frustumCulled = false;
-		this.scene.add(this.points);
-
-		this.resize();
-		this.start();
-	}
-
-	setMask(params: MaskParams) {
-		this.material.uniforms.uMidX.value = params.midX;
-		this.material.uniforms.uBallAx.value = params.ballAx;
-		this.material.uniforms.uBallBx.value = params.ballBx;
-	}
-
-	addRipple(x: number, y: number) {
-		const now = performance.now() / 1000;
-		this.ripples.push({ x, y, start: now }, { x: this.width - x, y, start: now });
-		if (this.ripples.length > 16) this.ripples.splice(0, this.ripples.length - 16);
-	}
-
-	resize() {
-		const rect = this.host.getBoundingClientRect();
-		this.width = Math.max(1, Math.floor(rect.width));
-		this.height = Math.max(1, Math.floor(rect.height));
-		this.renderer.setSize(this.width, this.height, false);
-		this.material.uniforms.uResolution.value.set(this.width, this.height);
-
-		this.camera.left = 0;
-		this.camera.right = this.width;
-		this.camera.top = 0;
-		this.camera.bottom = this.height;
-		this.camera.updateProjectionMatrix();
-
-		this.rebuildParticles();
-	}
-
-	destroy() {
-		this.destroyed = true;
-		if (this.rafId != null) cancelAnimationFrame(this.rafId);
-		this.renderer.dispose();
-		this.points.geometry.dispose();
-		this.material.dispose();
-	}
-
-	private start() {
-		const loop = () => {
-			if (this.destroyed) return;
-			const t = performance.now() / 1000;
-			this.material.uniforms.uTime.value = t;
-			this.ripples = this.ripples.filter((r) => t - r.start < 2.0);
-			this.material.uniforms.uRippleCount.value = Math.min(this.ripples.length, 8);
-
-			const pos = this.material.uniforms.uRipplePos.value as THREE.Vector2[];
-			const start = this.material.uniforms.uRippleStart.value as Float32Array;
-			for (let i = 0; i < 8; i++) {
-				if (i < this.ripples.length) {
-					pos[i].set(this.ripples[i].x, this.ripples[i].y);
-					start[i] = this.ripples[i].start;
-				} else {
-					pos[i].set(-9999, -9999);
-					start[i] = 0;
-				}
-			}
-
-			this.renderer.render(this.scene, this.camera);
-			this.rafId = requestAnimationFrame(loop);
-		};
-		this.rafId = requestAnimationFrame(loop);
-	}
-
-	private rebuildParticles() {
-		const spacing = clampInt(Math.round(Math.min(this.width, this.height) / 36), 7, 14);
-		const xs = Math.max(1, Math.floor(this.width / spacing));
-		const ys = Math.max(1, Math.floor(this.height / spacing));
-		const count = xs * ys;
-		const arr = new Float32Array(count * 3);
-		let i = 0;
-		for (let y = 0; y < ys; y++) {
-			for (let x = 0; x < xs; x++) {
-				arr[i++] = x * spacing + spacing * 0.5;
-				arr[i++] = y * spacing + spacing * 0.5;
-				arr[i++] = 0;
-			}
-		}
-		this.points.geometry.setAttribute("position", new THREE.BufferAttribute(arr, 3));
-		this.points.geometry.computeBoundingSphere();
 	}
 }
 
@@ -312,108 +191,234 @@ function makeCanvas() {
 	return canvas;
 }
 
-function makeShaderMaterial() {
-	return new THREE.ShaderMaterial({
-		transparent: true,
-		blending: THREE.AdditiveBlending,
-		depthTest: false,
-		depthWrite: false,
-		uniforms: {
-			uResolution: { value: new THREE.Vector2(1, 1) },
-			uTime: { value: 0 },
-			uMidX: { value: 0.5 },
-			uBallAx: { value: 0.5 },
-			uBallBx: { value: 0.5 },
-			uCool: { value: new THREE.Color("#8B5CF6") },
-			uWarm: { value: new THREE.Color("#EC4899") },
-			uRipplePos: { value: Array.from({ length: 8 }, () => new THREE.Vector2(-9999, -9999)) },
-			uRippleStart: { value: new Float32Array(8) },
-			uRippleCount: { value: 0 },
-		},
-		vertexShader: `
-			precision mediump float;
-			uniform vec2 uResolution;
-			uniform float uTime;
-			uniform float uMidX;
-			uniform float uBallAx;
-			uniform float uBallBx;
-			uniform vec2 uRipplePos[8];
-			uniform float uRippleStart[8];
-			uniform int uRippleCount;
+class WebGLPointsImpl {
+	private renderer: THREE.WebGLRenderer;
+	private scene: THREE.Scene;
+	private camera: THREE.OrthographicCamera;
+	private material: THREE.PointsMaterial;
+	private points: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+	private ripples: Ripple[] = [];
+	private rafId: number | null = null;
+	private destroyed = false;
+	private width = 1;
+	private height = 1;
+	private midX = 0.5;
+	private ballAx = 0.5;
+	private ballBx = 0.5;
 
-			varying float vMask;
-			varying float vSide;
-			varying float vWave;
+	private basePositions: Float32Array = new Float32Array(0);
+	private positions: Float32Array = new Float32Array(0);
+	private colors: Float32Array = new Float32Array(0);
+	private seeds: Float32Array = new Float32Array(0);
 
-			float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
-			float intervalMask(float x, float a, float b) {
-				float lo = min(a, b);
-				float hi = max(a, b);
-				float edge = 14.0;
-				float m1 = smoothstep(lo, lo + edge, x);
-				float m2 = 1.0 - smoothstep(hi - edge, hi, x);
-				return m1 * m2;
+	constructor(private host: HTMLElement, private beforeEl?: Element) {
+		const canvas = makeCanvas();
+		if (this.beforeEl) host.insertBefore(canvas, this.beforeEl);
+		else host.appendChild(canvas);
+
+		this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: "low-power" });
+		this.renderer.setClearColor(0x000000, 0);
+		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+		this.scene = new THREE.Scene();
+		this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -10, 10);
+		this.camera.position.set(0, 0, 1);
+
+		const map = makeDotTexture();
+		this.material = new THREE.PointsMaterial({
+			size: 6,
+			map,
+			transparent: true,
+			opacity: 0.45, // <= 0.5
+			vertexColors: true,
+			blending: THREE.AdditiveBlending,
+			depthTest: false,
+			depthWrite: false,
+			sizeAttenuation: false,
+		});
+
+		const geometry = new THREE.BufferGeometry();
+		geometry.setAttribute("position", new THREE.BufferAttribute(this.positions, 3));
+		geometry.setAttribute("color", new THREE.BufferAttribute(this.colors, 3));
+		this.points = new THREE.Points(geometry, this.material);
+		this.points.frustumCulled = false;
+		this.scene.add(this.points);
+
+		this.resize();
+		this.start();
+	}
+
+	setMask(params: MaskParams) {
+		this.midX = params.midX;
+		this.ballAx = params.ballAx;
+		this.ballBx = params.ballBx;
+	}
+
+	addRipple(x: number, y: number) {
+		const now = performance.now() / 1000;
+		this.ripples.push({ x, y, start: now }, { x: this.width - x, y, start: now });
+		if (this.ripples.length > 16) this.ripples.splice(0, this.ripples.length - 16);
+	}
+
+	resize() {
+		const rect = this.host.getBoundingClientRect();
+		this.width = Math.max(1, Math.floor(rect.width));
+		this.height = Math.max(1, Math.floor(rect.height));
+		this.renderer.setSize(this.width, this.height, false);
+
+		this.camera.left = 0;
+		this.camera.right = this.width;
+		this.camera.top = 0;
+		this.camera.bottom = this.height;
+		this.camera.updateProjectionMatrix();
+
+		this.rebuildParticles();
+	}
+
+	destroy() {
+		this.destroyed = true;
+		if (this.rafId != null) cancelAnimationFrame(this.rafId);
+		this.material.map?.dispose();
+		this.material.dispose();
+		this.points.geometry.dispose();
+		this.renderer.dispose();
+	}
+
+	private start() {
+		const loop = () => {
+			if (this.destroyed) return;
+			const t = performance.now() / 1000;
+			this.ripples = this.ripples.filter((r) => t - r.start < 2.0);
+			this.tick(t);
+			this.renderer.render(this.scene, this.camera);
+			this.rafId = requestAnimationFrame(loop);
+		};
+		this.rafId = requestAnimationFrame(loop);
+	}
+
+	private tick(time: number) {
+		const edge = 14;
+		const intervalMask = (x: number, a: number, b: number) => {
+			const lo = Math.min(a, b);
+			const hi = Math.max(a, b);
+			const m1 = smoothstep(lo, lo + edge, x);
+			const m2 = 1 - smoothstep(hi - edge, hi, x);
+			return m1 * m2;
+		};
+
+		const moved = Math.abs(this.ballAx - this.midX) + Math.abs(this.ballBx - this.midX);
+
+		const cool = { r: 139 / 255, g: 92 / 255, b: 246 / 255 };
+		const warm = { r: 236 / 255, g: 72 / 255, b: 153 / 255 };
+
+		for (let i = 0; i < this.basePositions.length; i += 3) {
+			const x = this.basePositions[i];
+			const y0 = this.basePositions[i + 1];
+
+			const mask = Math.max(intervalMask(x, this.midX, this.ballAx), intervalMask(x, this.midX, this.ballBx));
+			const band = Math.exp(-Math.abs(x - this.midX) / 120) * 0.10 * (1 - smoothstep(0, 10, moved));
+			const m = Math.max(mask, band);
+
+			let wave = 0;
+			for (let r = 0; r < this.ripples.length; r++) {
+				const rr = this.ripples[r];
+				const dt = time - rr.start;
+				if (dt < 0) continue;
+				const dx = x - rr.x;
+				const dy = y0 - rr.y;
+				const d = Math.hypot(dx, dy);
+				const w = Math.sin(d * 0.10 - dt * 7.0);
+				const env = Math.exp(-dt * 1.35) * Math.exp(-d * 0.02);
+				wave += w * env;
 			}
 
-			void main() {
-				float x = position.x;
-				float y = position.y;
+			const jitter = (this.seeds[i / 3] - 0.5) * 0.8;
+			this.positions[i] = x + jitter;
+			this.positions[i + 1] = y0 + wave * 3.5;
+			this.positions[i + 2] = 0;
 
-				float mask = max(intervalMask(x, uMidX, uBallAx), intervalMask(x, uMidX, uBallBx));
-				// faint center band so it never looks "broken"
-				float moved = abs(uBallAx - uMidX) + abs(uBallBx - uMidX);
-				float band = exp(-abs(x - uMidX) / 120.0) * 0.10 * (1.0 - smoothstep(0.0, 10.0, moved));
-				vMask = max(mask, band);
-				vSide = step(uMidX, x);
+			const side = x >= this.midX ? 1 : 0;
+			const base = side ? warm : cool;
+			const intensity = m * (0.55 + clamp(Math.abs(wave), 0, 1) * 0.45);
+			this.colors[i] = base.r * intensity;
+			this.colors[i + 1] = base.g * intensity;
+			this.colors[i + 2] = base.b * intensity;
+		}
 
-				float w = 0.0;
-				for (int i = 0; i < 8; i++) {
-					if (i >= uRippleCount) {
-						// no break (WebGL1)
-					}
-					if (i >= uRippleCount) continue;
-					float t = uTime - uRippleStart[i];
-					if (t < 0.0) continue;
-					float d = distance(vec2(x, y), uRipplePos[i]);
-					float wave = sin(d * 0.10 - t * 7.0);
-					float env = exp(-t * 1.35) * exp(-d * 0.020);
-					w += wave * env;
-				}
-				vWave = w;
+		const geom = this.points.geometry as THREE.BufferGeometry;
+		(geom.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+		(geom.attributes.color as THREE.BufferAttribute).needsUpdate = true;
+	}
 
-				float jx = (hash(vec2(x, y)) - 0.5) * 0.8;
-				float jy = (hash(vec2(y, x)) - 0.5) * 0.8;
-				float yy = y + jy + vWave * 3.5;
-				float xx = x + jx;
+	private rebuildParticles() {
+		const area = this.width * this.height;
+		const desired = 3800;
+		const spacing = clampInt(Math.round(Math.sqrt(area / desired)), 9, 18);
+		const xs = Math.max(1, Math.floor(this.width / spacing));
+		const ys = Math.max(1, Math.floor(this.height / spacing));
+		const count = xs * ys;
 
-				float ndcX = (xx / uResolution.x) * 2.0 - 1.0;
-				float ndcY = 1.0 - (yy / uResolution.y) * 2.0;
-				gl_Position = vec4(ndcX, ndcY, 0.0, 1.0);
+		this.basePositions = new Float32Array(count * 3);
+		this.positions = new Float32Array(count * 3);
+		this.colors = new Float32Array(count * 3);
+		this.seeds = new Float32Array(count);
 
-				float base = 2.2 + hash(vec2(x, y)) * 1.3;
-				float bump = clamp(vWave, 0.0, 1.0) * 2.0;
-				gl_PointSize = (base + bump) * 1.6;
+		let i = 0;
+		let s = 0;
+		for (let y = 0; y < ys; y++) {
+			for (let x = 0; x < xs; x++) {
+				const px = x * spacing + spacing * 0.5;
+				const py = y * spacing + spacing * 0.5;
+				this.basePositions[i] = px;
+				this.basePositions[i + 1] = py;
+				this.basePositions[i + 2] = 0;
+				this.positions[i] = px;
+				this.positions[i + 1] = py;
+				this.positions[i + 2] = 0;
+				this.colors[i] = 0;
+				this.colors[i + 1] = 0;
+				this.colors[i + 2] = 0;
+				this.seeds[s++] = ((x * 928371 + y * 1237) % 997) / 997;
+				i += 3;
 			}
-		`,
-		fragmentShader: `
-			precision mediump float;
-			uniform vec3 uCool;
-			uniform vec3 uWarm;
-			varying float vMask;
-			varying float vSide;
-			varying float vWave;
-			void main() {
-				vec2 p = gl_PointCoord * 2.0 - 1.0;
-				float r2 = dot(p, p);
-				if (r2 > 1.0) discard;
-				float soft = smoothstep(1.0, 0.0, r2);
-				vec3 base = mix(uCool, uWarm, vSide);
-				float glow = clamp(abs(vWave), 0.0, 1.0);
-				vec3 color = base + vec3(max(0.0, vWave)) * 0.10;
-				float alpha = vMask * soft * (0.22 + glow * 0.18);
-				alpha = clamp(alpha, 0.0, 0.5);
-				gl_FragColor = vec4(color, alpha);
-			}
-		`,
-	});
+		}
+
+		const geom = new THREE.BufferGeometry();
+		geom.setAttribute("position", new THREE.BufferAttribute(this.positions, 3));
+		geom.setAttribute("color", new THREE.BufferAttribute(this.colors, 3));
+		geom.computeBoundingSphere();
+		this.points.geometry.dispose();
+		this.points.geometry = geom;
+	}
+}
+
+function makeDotTexture() {
+	const size = 64;
+	const canvas = document.createElement("canvas");
+	canvas.width = size;
+	canvas.height = size;
+	const ctx = canvas.getContext("2d")!;
+	const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+	g.addColorStop(0, "rgba(255,255,255,1)");
+	g.addColorStop(0.45, "rgba(255,255,255,0.65)");
+	g.addColorStop(1, "rgba(255,255,255,0)");
+	ctx.fillStyle = g;
+	ctx.fillRect(0, 0, size, size);
+	const tex = new THREE.CanvasTexture(canvas);
+	tex.needsUpdate = true;
+	return tex;
+}
+
+function canUseWebGL() {
+	try {
+		const c = document.createElement("canvas");
+		const gl = c.getContext("webgl") || c.getContext("experimental-webgl");
+		return !!gl;
+	} catch {
+		return false;
+	}
+}
+
+function clampInt(value: number, min: number, max: number) {
+	return Math.min(Math.max(value, min), max);
 }
