@@ -5,10 +5,31 @@
   "source": "lib/number-line.ts",
   "main": "dist/number-line.js",
   "types": "dist/number-line.d.ts",
+  "targets": {
+    "main": {
+      "source": "lib/number-line.ts",
+      "distDir": "dist",
+      "outputFormat": "commonjs",
+      "isLibrary": true
+    },
+    "types": {
+      "source": "lib/number-line.ts",
+      "distDir": "dist",
+      "isLibrary": true
+    },
+    "site": {
+      "source": "src/index.html",
+      "distDir": "site-dist",
+      "publicUrl": "/",
+      "context": "browser"
+    }
+  },
   "scripts": {
     "test": "jest",
     "dev": "parcel src/index.html",
-    "build": "parcel build"
+    "build": "parcel build --target main --target types",
+    "build:site": "parcel build --target site",
+    "vercel-build": "npm run build:site"
   },
   "keywords": [
     "number line",
@@ -32,6 +53,7 @@
     "@parcel/transformer-sass": "^2.6.2",
     "@parcel/transformer-typescript-types": "^2.6.2",
     "@types/jest": "^29.5.12",
+    "autoprefixer": "^10.4.19",
     "jest": "^29.7.0",
     "parcel": "^2.6.2",
     "postcss": "^8.4.36",

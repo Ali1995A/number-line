@@ -3,39 +3,60 @@
 
 <head>
 	<meta charset="UTF-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-	<title>Number Line</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+	<meta name="theme-color" content="#F8FAFC" />
+	<title>数量级阶梯数轴 · Number Line</title>
 	<script type="module" src="main.ts"></script>
 	<link rel="stylesheet" href="./index.scss" />
 </head>
 
-<body class="h-full">
-	<div id="app"></div>
-	<header class="w-full h-96 bg-slate-800 text-white flex justify-center items-center text-6xl">Number Lines</header>
-	<main class="flex flex-col gap-10 mt-10">
-		<section class="text-center">
-			<h1>Drag to pan the number line with your mouse(or touch)</h1>
-			<div id="pan" class="cursor-grab active:cursor-grabbing"></div>
+<body class="min-h-screen bg-slate-50 text-slate-900">
+	<header class="nl-topbar sticky top-0 z-10 border-b border-slate-200/60 bg-white/70 backdrop-blur-xl">
+		<div class="mx-auto flex max-w-5xl flex-wrap items-center gap-3 px-4 py-3">
+			<div class="mr-auto flex flex-col">
+				<div class="text-[17px] font-semibold leading-tight tracking-tight">数量级阶梯数轴</div>
+				<div id="scale-label" class="text-xs text-slate-500">当前尺度：10^0</div>
+			</div>
+
+			<div class="flex items-center gap-2">
+				<button id="btn-zoom-out" class="nl-btn">÷10</button>
+				<button id="btn-zoom-in" class="nl-btn nl-btn-primary">×10</button>
+				<button id="btn-reset-zero" class="nl-btn">回到 0</button>
+			</div>
+
+			<label class="nl-toggle">
+				<span class="text-sm text-slate-700">逐级演示</span>
+				<input id="toggle-step-mode" type="checkbox" class="nl-switch" checked />
+			</label>
+			<label class="nl-toggle">
+				<span class="text-sm text-slate-700">完整数字</span>
+				<input id="toggle-full-number" type="checkbox" class="nl-switch" />
+			</label>
+
+			<div class="flex items-center gap-2 text-sm text-slate-600">
+				<span>目标 k</span>
+				<input id="input-target-k" type="number" inputmode="numeric" class="nl-input w-20" value="0" min="0" max="16" step="1" />
+			</div>
+		</div>
+	</header>
+
+	<main class="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-6">
+		<div id="current-value" class="nl-card text-center text-[22px] font-semibold tracking-tight"></div>
+
+		<section class="nl-card">
+			<div class="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-600">
+				<div>拖拽平移（桌面鼠标/iPad 单指），滚轮/捏合缩放（离散 k±1）</div>
+				<div class="tabular-nums">范围：<span id="range-label"></span></div>
+			</div>
+			<div id="axis" class="nl-axis relative h-32 w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-50"></div>
 		</section>
-		<section class="text-center">
-			<h1>Use pinch to zoom gesture on the number line to zoom around a position. Alternatively press CMD/Ctrl mouse wheel</h1>
-			<div id="positional-zoom" class="cursor-grab active:cursor-grabbing"></div>
-		</section>
-		<section class="text-center">
-			<h1>Jump to zoom directly jumps to a zoom percentage of the number line</h1>
-			<div id="jump-to-zoom"></div>
-		</section>
-		<section class="text-center">
-			<h1>Zoom to fit captures a defined scoped area of the number line</h1>
-			<div id="zoom-to-fit"></div>
-		</section>
-		<section class="text-center flex flex-row items-center justify-center gap-6">
-			<a href="https://github.com/nikhilnxvverma1/number-line?tab=readme-ov-file"><h1 class="underline text-blue-400">Github</h1></a>
-			<a href="https://github.com/nikhilnxvverma1/number-line?tab=readme-ov-file#number-line"><h1 class="underline text-blue-400">Documentation</h1></a>
-			
-		</section>
+
+		<p class="text-center text-xs text-slate-500">
+			提示：缩放只能逐级变化（…10^6、10^7、10^8…），逐级演示模式开启时会按级动画过渡。
+		</p>
 	</main>
-	<!-- <footer class="w-full h-10 flex justify-center text-white bg-slate-800 items-center absolute bottom-0">Made with love in India (<a href="https://github.com/nikhilnxvverma1">Nikhil Verma</a>)</footer> -->
 </body>
 
 </html>
