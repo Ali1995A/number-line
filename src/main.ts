@@ -239,9 +239,16 @@ function renderTick(x: number, heightClass: "tall" | "mid" | "short"): HTMLEleme
 	const tick = document.createElement("div");
 	tick.className = "absolute bottom-10 w-px bg-slate-700/70";
 	tick.style.left = `${x}px`;
-	if (heightClass === "tall") tick.style.height = "44px";
-	else if (heightClass === "mid") tick.style.height = "34px";
-	else tick.style.height = "26px";
+	if (heightClass === "tall") {
+		tick.style.height = "46px";
+		tick.style.opacity = "0.85";
+	} else if (heightClass === "mid") {
+		tick.style.height = "34px";
+		tick.style.opacity = "0.55";
+	} else {
+		tick.style.height = "24px";
+		tick.style.opacity = "0.30";
+	}
 	return tick;
 }
 
@@ -325,7 +332,7 @@ function valueToXWithEngine(value: number, eng: LadderEngine): number {
 function classifyTickHeight(height: number, biggest: number): "tall" | "mid" | "short" {
 	const ratio = biggest <= 0 ? 0 : height / biggest;
 	if (ratio >= 0.95) return "tall";
-	if (ratio >= 0.65) return "mid";
+	if (ratio >= 0.55) return "mid";
 	return "short";
 }
 
