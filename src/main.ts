@@ -541,6 +541,8 @@ function applyValueAtClientPoint(clientX: number, clientY: number) {
 }
 
 axis.addEventListener("pointerdown", (e) => {
+	// On iPad Safari, both Pointer Events and Touch Events may fire; we use Touch Events for touch UX.
+	if (e.pointerType === "touch") return;
 	if (e.pointerType === "touch") {
 		activeTouchPointers.add(e.pointerId);
 		// Two-finger pinch should only zoom (no value-follow, no ripples).
@@ -563,6 +565,7 @@ axis.addEventListener("pointerdown", (e) => {
 });
 
 axis.addEventListener("pointermove", (e) => {
+	if (e.pointerType === "touch") return;
 	if (pinching) return;
 	if (!dragging || !engine) return;
 	const rect = axis.getBoundingClientRect();
@@ -591,6 +594,7 @@ axis.addEventListener("pointermove", (e) => {
 });
 
 axis.addEventListener("pointerup", (e) => {
+	if (e.pointerType === "touch") return;
 	dragging = false;
 	draggingBall = null;
 	if (e.pointerType === "touch") {
@@ -599,6 +603,7 @@ axis.addEventListener("pointerup", (e) => {
 	}
 });
 axis.addEventListener("pointercancel", (e) => {
+	if (e.pointerType === "touch") return;
 	dragging = false;
 	draggingBall = null;
 	if (e.pointerType === "touch") {
@@ -611,15 +616,20 @@ axis.addEventListener("pointercancel", (e) => {
 let pinchStartDist = 0;
 let touchDragging = false;
 let touchDragId: number | null = null;
+let touchMoved = false;
+let lastTouchX = 0;
+let lastTouchY = 0;
 axis.addEventListener(
 	"touchstart",
 	(e) => {
 		if (e.touches.length === 1) {
 			pinching = false;
 			touchDragging = true;
+			touchMoved = false;
 			touchDragId = e.touches[0].identifier;
 			draggingBall = pickNearestBall(e.touches[0].clientX);
-			applyValueAtClientPoint(e.touches[0].clientX, e.touches[0].clientY);
+			lastTouchX = e.touches[0].clientX;
+			lastTouchY = e.touches[0].clientY;
 		} else if (e.touches.length === 2) {
 			e.preventDefault();
 			pinching = true;
@@ -657,12 +667,22 @@ axis.addEventListener(
 			const now = performance.now();
 			const dt = now - lastRippleAt;
 			const dist = Math.hypot(x - lastRippleX, y - lastRippleY);
+			if (!touchMoved) {
+				// First movement: immediate visible feedback.
+				touchMoved = true;
+				lastRippleAt = now;
+				lastRippleX = x;
+				lastRippleY = y;
+				particles.addRipple(x, y);
+			} else
 			if (dt >= 80 && dist >= 18) {
 				lastRippleAt = now;
 				lastRippleX = x;
 				lastRippleY = y;
 				particles.addRipple(x, y);
 			}
+			lastTouchX = t.clientX;
+			lastTouchY = t.clientY;
 			render();
 			return;
 		}
@@ -684,11 +704,16 @@ axis.addEventListener(
 );
 
 axis.addEventListener("touchend", () => {
+	// If it was a tap (no move, no pinch), treat as value select with a ripple.
+	if (!pinching && touchDragging && !touchMoved) {
+		applyValueAtClientPoint(lastTouchX, lastTouchY);
+	}
 	pinchStartDist = 0;
 	pinching = false;
 	touchDragging = false;
 	touchDragId = null;
 	draggingBall = null;
+	touchMoved = false;
 });
 axis.addEventListener("touchcancel", () => {
 	pinchStartDist = 0;
@@ -696,6 +721,7 @@ axis.addEventListener("touchcancel", () => {
 	touchDragging = false;
 	touchDragId = null;
 	draggingBall = null;
+	touchMoved = false;
 });
 
 function touchDistance(a: Touch, b: Touch) {
