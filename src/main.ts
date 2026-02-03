@@ -241,28 +241,30 @@ function renderCenterZero(width: number): HTMLElement {
 
 function renderTick(x: number, heightClass: "tall" | "mid" | "short"): HTMLElement {
 	const tick = document.createElement("div");
-	tick.className = "absolute bottom-10 w-px bg-slate-700/70";
+	tick.className = "absolute bottom-10 w-px bg-slate-700/50";
 	tick.style.left = `${x}px`;
 	if (heightClass === "tall") {
 		tick.style.height = "46px";
-		tick.style.opacity = "0.85";
+		tick.style.opacity = "0.72";
 	} else if (heightClass === "mid") {
 		tick.style.height = "34px";
-		tick.style.opacity = "0.55";
+		tick.style.opacity = "0.42";
 	} else {
 		tick.style.height = "24px";
-		tick.style.opacity = "0.30";
+		tick.style.opacity = "0.22";
 	}
 	return tick;
 }
 
 function renderTickLabel(x: number, label: string, opacity = 1): HTMLElement {
 	const el = document.createElement("div");
+	// Keep labels readable without creating a “foggy veil” over the particles.
 	el.className =
-		"absolute bottom-2 -translate-x-1/2 whitespace-nowrap rounded-md bg-white/70 px-1.5 py-0.5 text-xs text-slate-700 backdrop-blur";
+		"absolute bottom-2 -translate-x-1/2 whitespace-nowrap rounded-md px-1.5 py-0.5 text-xs font-semibold text-slate-700";
 	el.style.left = `${x}px`;
 	el.textContent = label;
 	el.style.opacity = String(opacity);
+	el.style.textShadow = "0 1px 0 rgba(255,255,255,0.85), 0 2px 8px rgba(255,255,255,0.65)";
 	return el;
 }
 
@@ -346,10 +348,11 @@ function renderVerticalRulerLayer(midX: number, height: number, opacity: number,
 		layer.appendChild(tick);
 
 		const label = document.createElement("div");
-		label.className = "absolute -translate-y-1/2 whitespace-nowrap rounded-md bg-white/70 px-1.5 py-0.5 text-xs text-slate-700 backdrop-blur";
+		label.className = "absolute -translate-y-1/2 whitespace-nowrap rounded-md px-1.5 py-0.5 text-xs font-semibold text-slate-700";
 		label.style.left = `${midX + 18}px`;
 		label.style.top = `${y}px`;
 		label.style.opacity = String(opacity);
+		label.style.textShadow = "0 1px 0 rgba(255,255,255,0.85), 0 2px 8px rgba(255,255,255,0.65)";
 		label.textContent = m.label;
 		layer.appendChild(label);
 	}
