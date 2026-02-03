@@ -39,7 +39,7 @@ const segIndependent = mustGetEl("#seg-independent") as HTMLButtonElement;
 
 let engine: LadderEngine | null = null;
 const layers = ensureAxisLayers(axis);
-const particles = new ParticleBlocks(axis, layers.overlay);
+const particles = new ParticleBlocks(axis, layers.mask);
 
 const state: State = {
 	k: 0,
@@ -133,10 +133,12 @@ function render() {
 	currentValueEl.textContent = formatValueBanner();
 
 	layers.bg.innerHTML = "";
+	layers.mask.innerHTML = "";
 	layers.overlay.innerHTML = "";
 	layers.overlay.appendChild(renderCenterZero(engine.width));
 
 	const ball = computeBallPositions(engine);
+	layers.mask.appendChild(renderCurtainMask(engine.width, ball.xA, ball.xB));
 	particles.set({
 		width: engine.width,
 		height,
@@ -217,6 +219,47 @@ function renderCenterZero(width: number): HTMLElement {
 	const wrap = document.createElement("div");
 	wrap.className = "absolute inset-0";
 	wrap.append(mid, badge, signLeft, signRight);
+	return wrap;
+}
+
+function renderCurtainMask(width: number, xA: number, xB: number): HTMLElement {
+	const mid = width / 2;
+	const leftMost = Math.min(mid, xA, xB);
+	const rightMost = Math.max(mid, xA, xB);
+
+	// Reveal expands from 0 outward. Everything beyond the furthest ball on that side stays covered.
+	const leftCoverW = clamp(leftMost, 0, mid);
+	const rightCoverX = clamp(rightMost, mid, width);
+
+	const wrap = document.createElement("div");
+	wrap.className = "absolute inset-0";
+
+	const left = document.createElement("div");
+	left.className = "absolute inset-y-0 left-0";
+	left.style.width = `${leftCoverW}px`;
+	left.style.background =
+		"linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,241,242,0.82))";
+	left.style.backdropFilter = "blur(6px)";
+	left.style.borderRight = "1px solid rgba(244,114,182,0.18)";
+
+	const right = document.createElement("div");
+	right.className = "absolute inset-y-0";
+	right.style.left = `${rightCoverX}px`;
+	right.style.right = "0px";
+	right.style.background =
+		"linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,241,242,0.82))";
+	right.style.backdropFilter = "blur(6px)";
+	right.style.borderLeft = "1px solid rgba(244,114,182,0.18)";
+
+	// Soft edge at center (so “拉开”感觉更像窗帘)
+	const seam = document.createElement("div");
+	seam.className = "absolute inset-y-0";
+	seam.style.left = `${mid - 1}px`;
+	seam.style.width = "2px";
+	seam.style.background =
+		"linear-gradient(180deg, rgba(244,114,182,0.18), rgba(139,92,246,0.14))";
+
+	wrap.append(left, right, seam);
 	return wrap;
 }
 
@@ -503,8 +546,9 @@ function touchDistance(a: Touch, b: Touch) {
 
 function ensureAxisLayers(host: HTMLElement) {
 	let bg = host.querySelector<HTMLElement>("[data-nl-bg]");
+	let mask = host.querySelector<HTMLElement>("[data-nl-mask]");
 	let overlay = host.querySelector<HTMLElement>("[data-nl-overlay]");
-	if (bg && overlay) return { bg, overlay };
+	if (bg && mask && overlay) return { bg, mask, overlay };
 
 	bg = document.createElement("div");
 	bg.dataset.nlBg = "1";
@@ -513,17 +557,25 @@ function ensureAxisLayers(host: HTMLElement) {
 	bg.style.pointerEvents = "none";
 	bg.style.zIndex = "0";
 
+	mask = document.createElement("div");
+	mask.dataset.nlMask = "1";
+	mask.style.position = "absolute";
+	mask.style.inset = "0";
+	mask.style.pointerEvents = "none";
+	mask.style.zIndex = "2";
+
 	overlay = document.createElement("div");
 	overlay.dataset.nlOverlay = "1";
 	overlay.style.position = "absolute";
 	overlay.style.inset = "0";
 	overlay.style.pointerEvents = "auto";
-	overlay.style.zIndex = "2";
+	overlay.style.zIndex = "3";
 
-	// ensure order: bg (0) -> particles canvas (1) -> overlay (2)
+	// ensure order: bg (0) -> particles canvas (1) -> mask (2) -> overlay (3)
 	host.appendChild(bg);
+	host.appendChild(mask);
 	host.appendChild(overlay);
-	return { bg, overlay };
+	return { bg, mask, overlay };
 }
 
 function pickNearestBall(clientX: number): "a" | "b" {

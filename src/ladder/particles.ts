@@ -218,70 +218,58 @@ export class ParticleBlocks {
 		this.posBases = [];
 		if (!this.params) return;
 
-		const { midX, ballAx, ballBx, valueA, valueB, k } = this.params;
+		const { midX } = this.params;
 
 		const bottomPad = 84;
 		const topPad = 14;
 		const regionTop = topPad;
 		const regionH = Math.max(60, this.height - bottomPad - topPad);
 
-		// Unit value per block:
-		// - k <= 4: 1 block = 1 (integer-only; ignores decimals)
-		// - each +1 k: unit ×10 (keeps max blocks <= 10^4)
-		// - when k crosses +4: one block effectively becomes “one 100×100 grid” of the previous cycle
-		const unitPow = Math.max(0, k - 4);
-		const unitValue = Math.pow(10, unitPow);
-		const maxBlocks = 10000; // 100×100
-		const calcFilled = (v: number) => clampInt(Math.floor(Math.abs(Math.trunc(v)) / unitValue), 0, maxBlocks);
+		const marginX = 14;
+		const marginY = 12;
 
-		const buildSide = (ballX: number, v: number) => {
-			const start = Math.min(midX, ballX);
-			const end = Math.max(midX, ballX);
+		const gy = regionTop + marginY;
+		const gh = Math.max(1, regionH - marginY * 2);
+
+		const buildField = (start: number, end: number, into: Array<{ x: number; y: number; s: number }>) => {
 			const w = Math.max(0, end - start);
-			if (w < 28) return;
+			if (w < 24) return;
 
-			const marginX = 14;
-			const marginY = 12;
 			const gx = start + marginX;
-			const gy = regionTop + marginY;
 			const gw = Math.max(1, w - marginX * 2);
-			const gh = Math.max(1, regionH - marginY * 2);
 
-			// Visual: fixed regular 100×100 array, with stronger boundaries every 10×10 chunk.
+			// Full regular field: fixed 100×100, with visible 10×10 boundaries.
 			const dim = 100;
 			const chunk = 10;
 			const gaps = dim / chunk - 1; // 9
-			const gapFrac = 0.65; // gap size as a fraction of cell
+			const gapFrac = 0.65;
+
 			const cell = Math.max(2.1, Math.min(gw / (dim + gaps * gapFrac), gh / (dim + gaps * gapFrac)));
 			const gapPx = cell * gapFrac;
 			const s = Math.max(1.6, cell * 0.82);
 
-			const filled = calcFilled(v);
-			if (filled <= 0) return;
+			const fieldW = dim * cell + gaps * gapPx;
+			const fieldH = dim * cell + gaps * gapPx;
 
-			const rightward = ballX >= midX;
-			const isPos = v >= 0;
+			const ox = gx + Math.max(0, (gw - fieldW) / 2);
+			const oy = gy + Math.max(0, (gh - fieldH) / 2);
 
-			// Fill order: column by distance from 0, then row (top->bottom)
-			for (let i = 0; i < filled; i++) {
-				const col = i % dim;
-				const row = Math.floor(i / dim);
-				const colGap = Math.floor(col / chunk);
-				const rowGap = Math.floor(row / chunk);
-				const xLocal = (col + 0.5) * cell + colGap * gapPx;
-				const yLocal = (row + 0.5) * cell + rowGap * gapPx;
-				const x = rightward ? gx + xLocal : gx + (dim * cell + gaps * gapPx) - xLocal;
-				const y = gy + yLocal;
-
-				const atChunkEdge = col % chunk === 0 || row % chunk === 0;
-				const s2 = atChunkEdge ? s * 0.74 : s;
-				(isPos ? this.posBases : this.negBases).push({ x, y, s: s2 });
-				if (this.posBases.length >= 10000 || this.negBases.length >= 10000) break;
+			for (let row = 0; row < dim; row++) {
+				for (let col = 0; col < dim; col++) {
+					const colGap = Math.floor(col / chunk);
+					const rowGap = Math.floor(row / chunk);
+					const x = ox + (col + 0.5) * cell + colGap * gapPx;
+					const y = oy + (row + 0.5) * cell + rowGap * gapPx;
+					const atChunkEdge = col % chunk === 0 || row % chunk === 0;
+					const s2 = atChunkEdge ? s * 0.74 : s;
+					into.push({ x, y, s: s2 });
+					if (into.length >= 10000) return;
+				}
 			}
 		};
 
-		buildSide(ballAx, valueA);
-		buildSide(ballBx, valueB);
+		buildField(0, midX, this.negBases);
+		buildField(midX, this.width, this.posBases);
 
 		this.meshNeg.count = Math.min(this.negBases.length, 10000);
 		this.meshPos.count = Math.min(this.posBases.length, 10000);
