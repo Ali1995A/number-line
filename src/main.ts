@@ -515,6 +515,7 @@ let draggingBall: "a" | "b" | null = null;
 let lastRippleAt = 0;
 let lastRippleX = 0;
 let lastRippleY = 0;
+const activeTouchPointers = new Set<number>();
 
 function applyValueAtClientPoint(clientX: number, clientY: number) {
 	if (!engine) return;
@@ -540,6 +541,16 @@ function applyValueAtClientPoint(clientX: number, clientY: number) {
 }
 
 axis.addEventListener("pointerdown", (e) => {
+	if (e.pointerType === "touch") {
+		activeTouchPointers.add(e.pointerId);
+		// Two-finger pinch should only zoom (no value-follow, no ripples).
+		if (activeTouchPointers.size >= 2) {
+			pinching = true;
+			dragging = false;
+			draggingBall = null;
+			return;
+		}
+	}
 	if (pinching) return;
 	dragging = true;
 	const target = e.target as HTMLElement;
@@ -552,6 +563,7 @@ axis.addEventListener("pointerdown", (e) => {
 });
 
 axis.addEventListener("pointermove", (e) => {
+	if (pinching) return;
 	if (!dragging || !engine) return;
 	const rect = axis.getBoundingClientRect();
 	const x = clamp(e.clientX - rect.left, 0, rect.width);
@@ -578,13 +590,21 @@ axis.addEventListener("pointermove", (e) => {
 	render();
 });
 
-axis.addEventListener("pointerup", () => {
+axis.addEventListener("pointerup", (e) => {
 	dragging = false;
 	draggingBall = null;
+	if (e.pointerType === "touch") {
+		activeTouchPointers.delete(e.pointerId);
+		if (activeTouchPointers.size < 2) pinching = false;
+	}
 });
-axis.addEventListener("pointercancel", () => {
+axis.addEventListener("pointercancel", (e) => {
 	dragging = false;
 	draggingBall = null;
+	if (e.pointerType === "touch") {
+		activeTouchPointers.delete(e.pointerId);
+		if (activeTouchPointers.size < 2) pinching = false;
+	}
 });
 
 // iPad pinch (Touch Events): snap to k±1 with thresholds.
@@ -601,6 +621,7 @@ axis.addEventListener(
 			draggingBall = pickNearestBall(e.touches[0].clientX);
 			applyValueAtClientPoint(e.touches[0].clientX, e.touches[0].clientY);
 		} else if (e.touches.length === 2) {
+			e.preventDefault();
 			pinching = true;
 			dragging = false;
 			touchDragging = false;
