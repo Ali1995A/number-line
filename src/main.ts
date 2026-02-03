@@ -9,6 +9,7 @@ import {
 } from "./ladder/format";
 import { DiscreteStepper } from "./ladder/stepper";
 import { ParticleBlocks } from "./ladder/particles";
+import { RulerCanvas } from "./ladder/ruler-canvas";
 
 type State = {
 	k: number;
@@ -41,6 +42,10 @@ let engine: LadderEngine | null = null;
 const layers = ensureAxisLayers(axis);
 const particles = new ParticleBlocks(axis, layers.overlay);
 const lowEndIPad = detectLowEndIPad();
+const ruler = new RulerCanvas(axis, layers.overlay);
+ruler.setLowEnd(lowEndIPad);
+document.body.classList.toggle("nl-low-end", lowEndIPad);
+const overlayUI = createOverlayUI(layers.overlay);
 
 const state: State = {
 	k: 0,
@@ -51,6 +56,10 @@ const state: State = {
 	valueA: 0,
 	valueB: 0,
 };
+
+let lastScaleLabelText = "";
+let lastRangeLabelText = "";
+let lastCurrentValueText = "";
 
 type Transition = {
 	fromK: number;
@@ -108,7 +117,7 @@ const stepper = new DiscreteStepper(state.k, (nextK) => {
 	state.valueA = toA;
 	state.valueB = toB;
 	inputTargetK.value = String(state.k);
-	render();
+	requestRender();
 });
 
 function mustGetEl<T extends Element = HTMLElement>(selector: string): T {
@@ -143,13 +152,21 @@ function render() {
 	if (state.symmetric) state.valueB = -state.valueA;
 	else state.valueB = clamp(state.valueB, -max, max);
 
-	scaleLabelEl.textContent = formatScaleLabel(state.k);
-	rangeLabelEl.textContent = `${formatRangeLabel(state.k)}`;
-	currentValueEl.textContent = formatValueBanner();
-
-	layers.bg.innerHTML = "";
-	layers.overlay.innerHTML = "";
-	layers.overlay.appendChild(renderCenterZero(engine.width));
+	const nextScaleLabel = formatScaleLabel(state.k);
+	const nextRangeLabel = `${formatRangeLabel(state.k)}`;
+	const nextCurrentValue = formatValueBanner();
+	if (nextScaleLabel !== lastScaleLabelText) {
+		lastScaleLabelText = nextScaleLabel;
+		scaleLabelEl.textContent = nextScaleLabel;
+	}
+	if (nextRangeLabel !== lastRangeLabelText) {
+		lastRangeLabelText = nextRangeLabel;
+		rangeLabelEl.textContent = nextRangeLabel;
+	}
+	if (nextCurrentValue !== lastCurrentValueText) {
+		lastCurrentValueText = nextCurrentValue;
+		currentValueEl.textContent = nextCurrentValue;
+	}
 
 	const ball = computeBallPositions(engine);
 	particles.set({
@@ -163,46 +180,37 @@ function render() {
 		valueB: state.valueB,
 	});
 
-	const vm = engine.numberLine.buildViewModel(engine.width);
-	const labelsOpacity = ball.labelsOpacity;
-	if (transition) {
-		// Cross-zoom: scale + crossfade tick/label layers so the ruler feels “infinite”.
-		const fromVm = transition.fromEngine.numberLine.buildViewModel(transition.fromEngine.width);
-		const dir = Math.sign(transition.toK - transition.fromK) || 1;
-		const tRaw = ball.t;
-		const ease = ball.ease;
-		const pulse = zoomPulse(tRaw);
-		const zoomMul = 1 + 0.14 * pulse; // 0 at endpoints => exact 10× loop
-		// Always the same loop per step: scale by exactly 10× between adjacent k levels.
-		// k+1 (zoom out): old 1 -> 0.1, new 10 -> 1
-		// k-1 (zoom in):  old 1 -> 10,  new 0.1 -> 1
-		const fromScale = Math.pow(10, -dir * ease) / zoomMul;
-		const toScale = Math.pow(10, dir * (1 - ease)) * zoomMul;
+	ruler.render({
+		width: engine.width,
+		height,
+		fullNumber: state.fullNumber,
+		k: state.k,
+		engine,
+		transition: transition
+			? {
+					fromK: transition.fromK,
+					toK: transition.toK,
+					t: ball.t,
+					ease: ball.ease,
+					fromEngine: transition.fromEngine,
+					toEngine: transition.toEngine,
+				}
+			: undefined,
+		formatValue,
+		lowEnd: lowEndIPad,
+	});
 
-		layers.overlay.appendChild(
-			renderRulerLayer(fromVm, transition.fromEngine.numberLine.biggestTickPatternValue, labelsOpacity.from, transition.fromK, fromScale),
-		);
-		layers.overlay.appendChild(
-			renderRulerLayer(vm, engine.numberLine.biggestTickPatternValue, labelsOpacity.to, state.k, toScale),
-		);
-		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, labelsOpacity.from, transition.fromK, fromScale));
-		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, labelsOpacity.to, state.k, toScale));
-	} else {
-		layers.overlay.appendChild(renderRulerLayer(vm, engine.numberLine.biggestTickPatternValue, 1, state.k, 1));
-		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, 1, state.k, 1));
-	}
-
-	const { xA, xB } = ball;
-	layers.overlay.appendChild(renderValueFollower(xA, formatValue(state.valueA, state.fullNumber, state.k), "a", engine.width));
-	if (!state.symmetric) {
-		layers.overlay.appendChild(renderValueFollower(xB, formatValue(state.valueB, state.fullNumber, state.k), "b", engine.width));
-	} else {
-		layers.overlay.appendChild(
-			renderValueFollower(xB, formatValue(state.valueB, state.fullNumber, state.k), "b", engine.width, true),
-		);
-	}
-	layers.overlay.appendChild(renderBall(xA, "a", labelsOpacity.from, labelsOpacity.to));
-	layers.overlay.appendChild(renderBall(xB, "b", labelsOpacity.from, labelsOpacity.to));
+	updateOverlayUI(overlayUI, {
+		width: engine.width,
+		height,
+		xA: ball.xA,
+		xB: ball.xB,
+		labelA: formatValue(state.valueA, state.fullNumber, state.k),
+		labelB: formatValue(state.valueB, state.fullNumber, state.k),
+		symmetric: state.symmetric,
+		fromOpacity: ball.labelsOpacity.from,
+		toOpacity: ball.labelsOpacity.to,
+	});
 
 	// continue animation frames if needed
 	if (transition) requestRender();
@@ -231,191 +239,108 @@ function formatValueBanner(): string {
 	return `A：${a}　B：${b}`;
 }
 
-function renderCenterZero(width: number): HTMLElement {
-	const mid = document.createElement("div");
-	mid.className = "absolute inset-y-0";
-	mid.style.left = `${width / 2}px`;
-	mid.style.width = "2px";
-	mid.style.background = "rgba(15, 23, 42, 0.85)";
+type OverlayUI = {
+	wrap: HTMLElement;
+	centerLine: HTMLDivElement;
+	centerBadge: HTMLDivElement;
+	signLeft: HTMLDivElement;
+	signRight: HTMLDivElement;
+	followerA: HTMLDivElement;
+	followerB: HTMLDivElement;
+	ballA: BallUI;
+	ballB: BallUI;
+};
 
-	const badge = document.createElement("div");
-	badge.className =
+type BallUI = {
+	wrap: HTMLDivElement;
+	line: HTMLDivElement;
+	ghost: HTMLDivElement;
+	knob: HTMLDivElement;
+	hit: HTMLDivElement;
+};
+
+function createOverlayUI(host: HTMLElement): OverlayUI {
+	host.style.pointerEvents = "none";
+	const wrap = document.createElement("div");
+	wrap.className = "absolute inset-0";
+	wrap.style.pointerEvents = "none";
+
+	const centerLine = document.createElement("div");
+	centerLine.className = "absolute inset-y-0";
+	centerLine.style.width = "3px";
+	centerLine.style.background = "rgba(15, 23, 42, 0.90)";
+
+	const centerBadge = document.createElement("div");
+	centerBadge.className =
 		"absolute left-1/2 top-2 -translate-x-1/2 rounded-full bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white";
-	badge.textContent = "0";
+	centerBadge.textContent = "0";
 
 	const signLeft = document.createElement("div");
-	signLeft.className = "absolute left-3 bottom-2 text-xs text-slate-500";
+	signLeft.className = "absolute left-3 bottom-2 text-xs font-semibold text-sky-600";
 	signLeft.textContent = "负";
 
 	const signRight = document.createElement("div");
-	signRight.className = "absolute right-3 bottom-2 text-xs text-slate-500";
+	signRight.className = "absolute right-3 bottom-2 text-xs font-semibold text-rose-600";
 	signRight.textContent = "正";
 
-	const wrap = document.createElement("div");
-	wrap.className = "absolute inset-0";
-	wrap.append(mid, badge, signLeft, signRight);
-	return wrap;
+	const followerA = document.createElement("div");
+	followerA.className = "absolute top-3 -translate-x-1/2 select-none";
+	followerA.style.pointerEvents = "none";
+	followerA.style.fontSize = "14px";
+	followerA.style.fontWeight = "800";
+	followerA.style.color = "rgb(136, 19, 55)";
+
+	const followerB = document.createElement("div");
+	followerB.className = "absolute top-3 -translate-x-1/2 select-none";
+	followerB.style.pointerEvents = "none";
+	followerB.style.fontSize = "13px";
+	followerB.style.fontWeight = "800";
+	followerB.style.color = "rgb(12, 74, 110)";
+
+	const ballA = createBallUI("a");
+	const ballB = createBallUI("b");
+
+	wrap.append(centerLine, centerBadge, signLeft, signRight, followerA, followerB, ballA.wrap, ballB.wrap);
+	host.appendChild(wrap);
+
+	return { wrap, centerLine, centerBadge, signLeft, signRight, followerA, followerB, ballA, ballB };
 }
 
-function renderTick(x: number, heightClass: "tall" | "mid" | "short"): HTMLElement {
-	const tick = document.createElement("div");
-	tick.className = "absolute bottom-10 w-px bg-slate-700/50";
-	tick.style.left = `${x}px`;
-	if (heightClass === "tall") {
-		tick.style.height = "46px";
-		tick.style.opacity = "0.72";
-	} else if (heightClass === "mid") {
-		tick.style.height = "34px";
-		tick.style.opacity = "0.42";
-	} else {
-		tick.style.height = "24px";
-		tick.style.opacity = "0.22";
-	}
-	return tick;
-}
-
-function renderTickLabel(x: number, label: string, opacity = 1): HTMLElement {
-	const el = document.createElement("div");
-	// Keep labels readable without creating a “foggy veil” over the particles.
-	el.className =
-		"absolute bottom-2 -translate-x-1/2 whitespace-nowrap rounded-md px-1.5 py-0.5 text-xs font-semibold text-slate-700";
-	el.style.left = `${x}px`;
-	el.textContent = label;
-	el.style.opacity = String(opacity);
-	el.style.textShadow = "0 1px 0 rgba(255,255,255,0.85), 0 2px 8px rgba(255,255,255,0.65)";
-	return el;
-}
-
-function renderRulerLayer(
-	viewModel: { tickMarks: Array<{ label: string | null; position: number; height: number; value: number }> },
-	biggestTick: number,
-	opacity: number,
-	kForLabels: number,
-	scaleX: number,
-) {
-	const layer = document.createElement("div");
-	layer.className = "absolute inset-0";
-	layer.style.pointerEvents = "none";
-	layer.style.opacity = String(opacity);
-	layer.style.transformOrigin = "50% 86%";
-	const scaleY = 1 + (scaleX - 1) * 0.32;
-	layer.style.transform = `scale(${scaleX}, ${scaleY})`;
-	layer.style.willChange = "transform, opacity";
-
-	for (const t of viewModel.tickMarks) {
-		layer.appendChild(renderTick(t.position, classifyTickHeight(t.height, biggestTick)));
-		if (t.label != null) {
-			layer.appendChild(renderTickLabel(t.position, formatValue(t.value, state.fullNumber, kForLabels), opacity));
-		}
-	}
-	return layer;
-}
-
-function renderVerticalRulerLayer(midX: number, height: number, opacity: number, kForLabels: number, scale: number) {
-	const layer = document.createElement("div");
-	layer.className = "absolute inset-0";
-	layer.style.pointerEvents = "none";
-	layer.style.opacity = String(opacity);
-
-	const topPad = 56;
-	const bottomPad = 92;
-	const baseY = clamp(height - bottomPad, 0, height);
-	const topY = clamp(topPad, 0, height);
-	const originPct = height <= 0 ? 50 : (baseY / height) * 100;
-
-	// Scale around the bottom origin (0 at baseY), so it feels consistent with horizontal 10× zoom loop.
-	layer.style.transformOrigin = `50% ${originPct.toFixed(2)}%`;
-	layer.style.transform = `scale(1, ${scale})`;
-	layer.style.willChange = "transform, opacity";
-
-	// Center line
-	const line = document.createElement("div");
-	line.className = "absolute w-px";
-	line.style.left = `${midX}px`;
-	line.style.top = `${topY}px`;
-	line.style.bottom = `${height - baseY}px`;
-	line.style.background = "rgba(15, 23, 42, 0.10)";
-	layer.appendChild(line);
-
-	// Vertical ruler: origin at bottom, no negatives. Labels match horizontal formatting.
-	const usable = Math.max(80, baseY - topY);
-	const max = kForLabels === 0 ? 1 : Math.pow(10, kForLabels);
-	const half = max / 2;
-
-	const yForValue = (v: number) => {
-		const t = max <= 0 ? 0 : clamp(v / max, 0, 1);
-		return baseY - t * usable;
-	};
-
-	const marks: Array<{ v: number; major: boolean; label: string }> = [
-		{ v: 0, major: true, label: "0" },
-		{ v: half, major: false, label: formatValue(half, state.fullNumber, kForLabels) },
-		{ v: max, major: true, label: formatValue(max, state.fullNumber, kForLabels) },
-	];
-
-	for (const m of marks) {
-		const y = clamp(yForValue(m.v), topY, baseY);
-
-		const tick = document.createElement("div");
-		tick.className = "absolute h-px";
-		tick.style.left = `${midX}px`;
-		tick.style.top = `${y}px`;
-		tick.style.width = m.major ? "28px" : "18px";
-		tick.style.transform = "translateX(-50%)";
-		tick.style.background = m.major ? "rgba(15, 23, 42, 0.18)" : "rgba(15, 23, 42, 0.12)";
-		layer.appendChild(tick);
-
-		const label = document.createElement("div");
-		label.className = "absolute -translate-y-1/2 whitespace-nowrap rounded-md px-1.5 py-0.5 text-xs font-semibold text-slate-700";
-		label.style.left = `${midX + 18}px`;
-		label.style.top = `${y}px`;
-		label.style.opacity = String(opacity);
-		label.style.textShadow = "0 1px 0 rgba(255,255,255,0.85), 0 2px 8px rgba(255,255,255,0.65)";
-		label.textContent = m.label;
-		layer.appendChild(label);
-	}
-
-	return layer;
-}
-
-function renderBall(x: number, which: "a" | "b", fromOpacity: number, toOpacity: number): HTMLElement {
+function createBallUI(which: "a" | "b"): BallUI {
 	const wrap = document.createElement("div");
 	wrap.className = "absolute inset-y-0";
-	wrap.style.left = `${x}px`;
 	wrap.style.width = "0px";
+	wrap.style.pointerEvents = "none";
 
 	const color =
 		which === "a"
-			? { line: "rgba(236,72,153,0.92)", fill: "rgba(251,207,232,1)", border: "rgba(219,39,119,1)" }
-			: { line: "rgba(139,92,246,0.92)", fill: "rgba(221,214,254,1)", border: "rgba(109,40,217,1)" };
+			? { line: "rgba(236,72,153,1)", fill: "rgb(253, 164, 215)", border: "rgb(219,39,119)" }
+			: { line: "rgba(56,189,248,1)", fill: "rgb(125, 211, 252)", border: "rgb(14, 116, 144)" };
 
 	const line = document.createElement("div");
 	line.className = "absolute bottom-10 w-0.5";
 	line.style.left = "-1px";
 	line.style.height = "64px";
 	line.style.background = color.line;
-	line.style.opacity = String(toOpacity);
 
 	const knob = document.createElement("div");
-	knob.className = "absolute bottom-10 left-0 -translate-x-1/2 -translate-y-1/2 shadow";
-	knob.style.width = "26px";
-	knob.style.height = "26px";
+	knob.className = "absolute bottom-10 left-0 -translate-x-1/2 -translate-y-1/2";
+	knob.style.width = "28px";
+	knob.style.height = "28px";
 	knob.style.borderRadius = "999px";
-	knob.style.border = `2px solid ${color.border}`;
+	knob.style.border = `3px solid ${color.border}`;
 	knob.style.background = color.fill;
-	knob.style.opacity = String(toOpacity);
-	knob.dataset.ball = which;
+	knob.style.boxShadow = "0 8px 18px rgba(15, 23, 42, 0.16)";
 
-	// larger hit target
 	const hit = document.createElement("div");
 	hit.className = "absolute bottom-10 left-0 -translate-x-1/2 -translate-y-1/2";
-	hit.style.width = "44px";
-	hit.style.height = "44px";
+	hit.style.width = "52px";
+	hit.style.height = "52px";
 	hit.style.borderRadius = "999px";
 	hit.style.background = "transparent";
+	hit.style.pointerEvents = "auto";
 	hit.dataset.ball = which;
 
-	// during k transition, slightly fade the ball if it's clamped
 	const ghost = document.createElement("div");
 	ghost.className = knob.className;
 	ghost.style.width = knob.style.width;
@@ -423,43 +348,46 @@ function renderBall(x: number, which: "a" | "b", fromOpacity: number, toOpacity:
 	ghost.style.borderRadius = knob.style.borderRadius;
 	ghost.style.border = knob.style.border;
 	ghost.style.background = knob.style.background;
-	ghost.style.opacity = String(fromOpacity);
+	ghost.style.boxShadow = "none";
 
 	wrap.append(line, ghost, knob, hit);
-	return wrap;
+	return { wrap, line, ghost, knob, hit };
 }
 
-function renderValueFollower(
-	x: number,
-	label: string,
-	which: "a" | "b",
-	width: number,
-	subtle = false,
-): HTMLElement {
-	const el = document.createElement("div");
-	el.className = "absolute top-3 -translate-x-1/2 select-none";
-	el.style.pointerEvents = "none";
-	el.style.left = `${clamp(x, 24, width - 24)}px`;
+function updateOverlayUI(
+	ui: OverlayUI,
+	p: {
+		width: number;
+		height: number;
+		xA: number;
+		xB: number;
+		labelA: string;
+		labelB: string;
+		symmetric: boolean;
+		fromOpacity: number;
+		toOpacity: number;
+	},
+) {
+	const midX = p.width / 2;
+	ui.centerLine.style.left = `${midX}px`;
 
-	const color =
-		which === "a"
-			? { bg: "rgba(251,207,232,0.88)", border: "rgba(219,39,119,0.55)", text: "rgb(136, 19, 55)" }
-			: { bg: "rgba(221,214,254,0.86)", border: "rgba(109,40,217,0.50)", text: "rgb(76, 29, 149)" };
+	const clampX = (x: number) => clamp(x, 24, p.width - 24);
+	ui.followerA.style.left = `${clampX(p.xA)}px`;
+	if (ui.followerA.textContent !== p.labelA) ui.followerA.textContent = p.labelA;
 
-	// Avoid any “veil” over particles: no blurred or translucent pill background.
-	el.style.background = "transparent";
-	el.style.border = "none";
-	el.style.color = color.text;
-	el.style.padding = subtle ? "6px 8px" : "7px 10px";
-	el.style.borderRadius = "12px";
-	el.style.fontSize = subtle ? "12px" : "13px";
-	el.style.fontWeight = subtle ? "600" : "700";
-	el.style.letterSpacing = "-0.01em";
-	el.style.textShadow =
-		"0 1px 0 rgba(255,255,255,0.95), 0 0 10px rgba(255,255,255,0.75), 0 6px 18px rgba(15,23,42,0.08)";
-	el.style.opacity = subtle ? "0.9" : "1";
-	el.textContent = label;
-	return el;
+	ui.followerB.style.left = `${clampX(p.xB)}px`;
+	if (ui.followerB.textContent !== p.labelB) ui.followerB.textContent = p.labelB;
+	ui.followerB.style.opacity = p.symmetric ? "0.75" : "1";
+
+	updateBallUI(ui.ballA, p.xA, p.fromOpacity, p.toOpacity);
+	updateBallUI(ui.ballB, p.xB, p.fromOpacity, p.toOpacity);
+}
+
+function updateBallUI(ball: BallUI, x: number, fromOpacity: number, toOpacity: number) {
+	ball.wrap.style.left = `${x}px`;
+	ball.line.style.opacity = String(toOpacity);
+	ball.knob.style.opacity = String(toOpacity);
+	ball.ghost.style.opacity = String(fromOpacity);
 }
 
 function valueToXWithEngine(value: number, eng: LadderEngine): number {
@@ -467,13 +395,6 @@ function valueToXWithEngine(value: number, eng: LadderEngine): number {
 	// => pos = value*(unitLength/unitValue) - displacement
 	const ratio = eng.numberLine.unitLength / eng.numberLine.unitValue;
 	return value * ratio - eng.numberLine.displacement;
-}
-
-function classifyTickHeight(height: number, biggest: number): "tall" | "mid" | "short" {
-	const ratio = biggest <= 0 ? 0 : height / biggest;
-	if (ratio >= 0.95) return "tall";
-	if (ratio >= 0.55) return "mid";
-	return "short";
 }
 
 // --- Interactions ---
@@ -530,9 +451,8 @@ let draggingBall: "a" | "b" | null = null;
 let lastRippleAt = 0;
 let lastRippleX = 0;
 let lastRippleY = 0;
-const activeTouchPointers = new Set<number>();
 
-function applyValueAtClientPoint(clientX: number, clientY: number) {
+function applyValueAtClientPoint(clientX: number, clientY: number, opts?: { emitRipple?: boolean }) {
 	if (!engine) return;
 	const rect = axis.getBoundingClientRect();
 	const x = clamp(clientX - rect.left, 0, rect.width);
@@ -546,37 +466,28 @@ function applyValueAtClientPoint(clientX: number, clientY: number) {
 	}
 	if (state.symmetric) state.valueB = -state.valueA;
 
-	// ripple (throttled by movement during dragging; always emit on tap)
-	const now = performance.now();
-	lastRippleAt = now;
-	lastRippleX = x;
-	lastRippleY = clamp(clientY - rect.top, 0, rect.height);
-	particles.addRipple(lastRippleX, lastRippleY);
+	const emitRipple = opts?.emitRipple ?? true;
+	if (emitRipple) {
+		// ripple (throttled by movement during dragging; always emit on tap)
+		const now = performance.now();
+		lastRippleAt = now;
+		lastRippleX = x;
+		lastRippleY = clamp(clientY - rect.top, 0, rect.height);
+		particles.addRipple(lastRippleX, lastRippleY);
+	}
 	requestRender();
 }
 
 axis.addEventListener("pointerdown", (e) => {
 	// On iPad Safari, both Pointer Events and Touch Events may fire; we use Touch Events for touch UX.
 	if (e.pointerType === "touch") return;
-	if (e.pointerType === "touch") {
-		activeTouchPointers.add(e.pointerId);
-		// Two-finger pinch should only zoom (no value-follow, no ripples).
-		if (activeTouchPointers.size >= 2) {
-			pinching = true;
-			dragging = false;
-			draggingBall = null;
-			return;
-		}
-	}
 	if (pinching) return;
 	dragging = true;
-	const target = e.target as HTMLElement;
-	const attr = target?.dataset?.ball as "a" | "b" | undefined;
-	draggingBall = attr ?? pickNearestBall(e.clientX);
+	draggingBall = pickNearestBall(e.clientX);
 	axis.setPointerCapture(e.pointerId);
 
 	// Tap anywhere: value follows finger/mouse immediately + ripple.
-	applyValueAtClientPoint(e.clientX, e.clientY);
+	applyValueAtClientPoint(e.clientX, e.clientY, { emitRipple: true });
 });
 
 axis.addEventListener("pointermove", (e) => {
@@ -614,19 +525,11 @@ axis.addEventListener("pointerup", (e) => {
 	if (e.pointerType === "touch") return;
 	dragging = false;
 	draggingBall = null;
-	if (e.pointerType === "touch") {
-		activeTouchPointers.delete(e.pointerId);
-		if (activeTouchPointers.size < 2) pinching = false;
-	}
 });
 axis.addEventListener("pointercancel", (e) => {
 	if (e.pointerType === "touch") return;
 	dragging = false;
 	draggingBall = null;
-	if (e.pointerType === "touch") {
-		activeTouchPointers.delete(e.pointerId);
-		if (activeTouchPointers.size < 2) pinching = false;
-	}
 });
 
 // iPad pinch (Touch Events): snap to k±1 with thresholds.
@@ -647,6 +550,8 @@ axis.addEventListener(
 			draggingBall = pickNearestBall(e.touches[0].clientX);
 			lastTouchX = e.touches[0].clientX;
 			lastTouchY = e.touches[0].clientY;
+			// Immediate follow + ripple for kid-friendly feedback.
+			applyValueAtClientPoint(lastTouchX, lastTouchY, { emitRipple: true });
 		} else if (e.touches.length === 2) {
 			e.preventDefault();
 			pinching = true;
@@ -721,10 +626,6 @@ axis.addEventListener(
 );
 
 axis.addEventListener("touchend", () => {
-	// If it was a tap (no move, no pinch), treat as value select with a ripple.
-	if (!pinching && touchDragging && !touchMoved) {
-		applyValueAtClientPoint(lastTouchX, lastTouchY);
-	}
 	pinchStartDist = 0;
 	pinching = false;
 	touchDragging = false;
@@ -763,8 +664,8 @@ function ensureAxisLayers(host: HTMLElement) {
 	overlay.dataset.nlOverlay = "1";
 	overlay.style.position = "absolute";
 	overlay.style.inset = "0";
-	overlay.style.pointerEvents = "auto";
-	overlay.style.zIndex = "2";
+	overlay.style.pointerEvents = "none";
+	overlay.style.zIndex = "3";
 
 	// ensure order: bg (0) -> particles canvas (1) -> overlay (2)
 	host.appendChild(bg);
@@ -793,7 +694,7 @@ function computeBallPositions(eng: LadderEngine) {
 	}
 	const now = performance.now();
 	const t = clamp((now - transition.startAt) / transition.durationMs, 0, 1);
-	const ease = easeInOutQuint(t);
+	const ease = easeInOutCubic(t);
 
 	const xFromA = valueToXWithEngine(transition.fromA, transition.fromEngine);
 	const xToA = valueToXWithEngine(transition.toA, transition.toEngine);
@@ -815,23 +716,19 @@ function computeBallPositions(eng: LadderEngine) {
 	};
 }
 
-function easeInOutQuint(t: number) {
-	return t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
-}
-
-function zoomPulse(t: number) {
-	// 0 at endpoints, gentle in the middle.
-	const s = Math.sin(Math.PI * clamp(t, 0, 1));
-	return s * s;
+function easeInOutCubic(t: number) {
+	return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
 // Initial render + resize handling
-const ro = new ResizeObserver(() => requestRender());
+const ro = new ResizeObserver(() => {
+	particles.resize();
+	ruler.resize();
+	requestRender();
+});
 ro.observe(axis);
-
-const roParticles = new ResizeObserver(() => particles.resize());
-roParticles.observe(axis);
-
+particles.resize();
+ruler.resize();
 requestRender();
 
 function detectLowEndIPad() {

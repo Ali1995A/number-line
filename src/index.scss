@@ -57,7 +57,8 @@
 
 	.nl-card {
 		border: 1px solid rgba(var(--nl-border), 0.35);
-		background: rgba(var(--nl-surface), 0.92);
+		/* Solid surface to avoid any “fog/veil” over particles (especially on iPad). */
+		background: rgb(var(--nl-surface));
 		box-shadow: 0 1px 1px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(236, 72, 153, 0.08);
 		@apply rounded-2xl px-4 py-3;
 	}
@@ -173,4 +174,15 @@
 	.nl-hint {
 		display: none;
 	}
+}
+
+/* Performance mode (1st-gen iPad Pro): remove expensive backdrop blur & heavy shadows */
+.nl-low-end .nl-topbar {
+	backdrop-filter: none !important;
+	-webkit-backdrop-filter: none !important;
+	background: rgba(255, 255, 255, 0.96) !important;
+}
+
+.nl-low-end .nl-card {
+	box-shadow: 0 1px 1px rgba(15, 23, 42, 0.03) !important;
 }

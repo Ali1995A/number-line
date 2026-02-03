@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import * as THREE from "three";
 
 // Rule: render only block particles within data region (no background dots).
 // Hierarchy (discrete k): always render a regular 100×100 grid, but each block represents a larger
@@ -115,9 +114,12 @@ export class ParticleBlocks {
 		this.renderer = new THREE.WebGLRenderer({
 			canvas: this.canvas,
 			alpha: true,
+			premultipliedAlpha: false,
 			antialias: !this.perf.lowEnd,
+			precision: this.perf.lowEnd ? "mediump" : "highp",
 			powerPreference: "low-power",
 		});
+		this.renderer.sortObjects = false;
 		this.renderer.setClearColor(0x000000, 0);
 		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.perf.maxPixelRatio));
 		// Make colors pop correctly on iPad/Safari (sRGB output).
@@ -130,8 +132,6 @@ export class ParticleBlocks {
 		this.camera.position.set(0, 0, 1);
 
 		const geo = new THREE.PlaneGeometry(1, 1);
-		// Opaque, kid-friendly blocks: avoid alpha masks/transparency which can look “foggy” on iPad.
-		const alphaTex = undefined;
 
 		this.stage = new THREE.Group();
 		this.scene.add(this.stage);
@@ -145,33 +145,35 @@ export class ParticleBlocks {
 			const matNegBase = new THREE.MeshBasicMaterial({
 				color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
 				opacity: baseOpacity,
-				transparent: false,
+				transparent: true,
+				blending: THREE.NormalBlending,
 				depthTest: false,
 				depthWrite: false,
 			});
 			const matNegActive = new THREE.MeshBasicMaterial({
 				color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
 				opacity: activeOpacity,
-				transparent: false,
+				transparent: true,
+				blending: THREE.NormalBlending,
 				depthTest: false,
 				depthWrite: false,
 			});
 			const matPosBase = new THREE.MeshBasicMaterial({
 				color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
 				opacity: baseOpacity,
-				transparent: false,
+				transparent: true,
+				blending: THREE.NormalBlending,
 				depthTest: false,
 				depthWrite: false,
 			});
 			const matPosActive = new THREE.MeshBasicMaterial({
 				color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
 				opacity: activeOpacity,
-				transparent: false,
+				transparent: true,
+				blending: THREE.NormalBlending,
 				depthTest: false,
 				depthWrite: false,
 			});
-
-			// No alpha maps / alpha tests.
 
 			const negBase = new THREE.InstancedMesh(geo, matNegBase, 10000);
 			const negActive = new THREE.InstancedMesh(geo, matNegActive, 10000);
@@ -422,7 +424,7 @@ export class ParticleBlocks {
 			for (let i = 0; i < negCount; i++) {
 				const b = this.negBases[i];
 				const w = waveAt(midX + b.x * scale, midY + b.y * scale);
-				const s = b.s * (1 + clamp(w, -0.55, 0.75));
+				const s = b.s * (1 + clamp(w, -0.70, 1.05));
 				tmp.position.set(b.x, b.y, 0);
 				tmp.scale.set(s, s, 1);
 				tmp.updateMatrix();
@@ -433,7 +435,7 @@ export class ParticleBlocks {
 			for (let i = 0; i < posCount; i++) {
 				const b = this.posBases[i];
 				const w = waveAt(midX + b.x * scale, midY + b.y * scale);
-				const s = b.s * (1 + clamp(w, -0.55, 0.75));
+				const s = b.s * (1 + clamp(w, -0.70, 1.05));
 				tmp.position.set(b.x, b.y, 0);
 				tmp.scale.set(s, s, 1);
 				tmp.updateMatrix();
@@ -445,11 +447,11 @@ export class ParticleBlocks {
 		if (this.kTransition) {
 			const tr = this.kTransition;
 			const t = clamp((nowMs - tr.startMs) / tr.durMs, 0, 1);
-			const e = this.easeInOutQuint(t);
-			const pulse = this.zoomPulse(t);
-			const mul = 1 + 0.14 * pulse; // 0 at endpoints => exact 10× loop
-			const fromScale = Math.pow(10, -tr.dir * e) / mul;
-			const toScale = Math.pow(10, tr.dir * (1 - e)) * mul;
+			const e = this.easeInOutCubic(t);
+			// Exact 10× loop, no "flash" pulse — feels like a real zoom.
+			// Use raw `t` for scale so the 10× change feels physically consistent (log-linear).
+			const fromScale = Math.pow(10, -tr.dir * t);
+			const toScale = Math.pow(10, tr.dir * (1 - t));
 
 			const fromField = this.fields[tr.fromField];
 			const toField = this.fields[tr.toField];
@@ -459,8 +461,10 @@ export class ParticleBlocks {
 			fromField.group.scale.set(fromScale, fromScale, 1);
 			toField.group.scale.set(toScale, toScale, 1);
 
-			setFieldAlpha(fromField, 1 - e);
-			setFieldAlpha(toField, e);
+			// Keep particles visually solid: cross-fade only in a short middle window.
+			const mix = smoothstep(0.22, 0.78, e);
+			setFieldAlpha(fromField, 1 - mix);
+			setFieldAlpha(toField, mix);
 
 			// Ease active counts to avoid “popping” while scaling.
 			const fromCountsFull = applyCounts(fromField, tr.fromParams);
@@ -470,8 +474,8 @@ export class ParticleBlocks {
 				posCount: fromCountsFull.posCount,
 			};
 			const toCounts = {
-				negCount: clampInt(Math.round(toCountsFull.negCount * e), 0, 10000),
-				posCount: clampInt(Math.round(toCountsFull.posCount * e), 0, 10000),
+				negCount: clampInt(Math.round(toCountsFull.negCount * mix), 0, 10000),
+				posCount: clampInt(Math.round(toCountsFull.posCount * mix), 0, 10000),
 			};
 			toField.negActive.count = toCounts.negCount;
 			toField.posActive.count = toCounts.posCount;
@@ -643,7 +647,7 @@ export class ParticleBlocks {
 		const deform = (idx: number, base: { x: number; y: number; s: number }, mesh: THREE.InstancedMesh) => {
 			const w = waveAt(midX + base.x * fieldScale, midY + base.y * fieldScale);
 			// Smaller amplitude for base grid (so it doesn't overpower active count).
-			const s = base.s * (1 + clamp(w, -0.30, 0.45));
+			const s = base.s * (1 + clamp(w, -0.40, 0.70));
 			tmp.position.set(base.x, base.y, 0);
 			tmp.scale.set(s, s, 1);
 			tmp.updateMatrix();
@@ -729,13 +733,8 @@ export class ParticleBlocks {
 		if (this.ripples.length > 0 && timeSec) this.requestFrame();
 	}
 
-	private easeInOutQuint(t: number) {
-		return t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
-	}
-
-	private zoomPulse(t: number) {
-		const s = Math.sin(Math.PI * clamp(t, 0, 1));
-		return s * s;
+	private easeInOutCubic(t: number) {
+		return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 	}
 }
 
@@ -764,4 +763,7 @@ function detectPerf() {
 	};
 }
 
-// (alpha texture removed: we render fully opaque blocks)
+function smoothstep(edge0: number, edge1: number, x: number) {
+	const t = clamp((x - edge0) / Math.max(1e-6, edge1 - edge0), 0, 1);
+	return t * t * (3 - 2 * t);
+}
