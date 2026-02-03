@@ -29,12 +29,28 @@ export class ParticleBlocks {
 	private renderer: THREE.WebGLRenderer;
 	private scene: THREE.Scene;
 	private camera: THREE.OrthographicCamera;
-	private root: THREE.Group;
-
-	private meshNegBase: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-	private meshNegActive: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-	private meshPosBase: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-	private meshPosActive: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+	private stage: THREE.Group;
+	private fields: Array<{
+		group: THREE.Group;
+		negBase: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+		negActive: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+		posBase: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+		posActive: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+		baseOpacity: number;
+		activeOpacity: number;
+	}>;
+	private activeField = 0;
+	private kTransition:
+		| null
+		| {
+				fromField: number;
+				toField: number;
+				dir: 1 | -1;
+				startMs: number;
+				durMs: number;
+				fromParams: BlockParams;
+				toParams: BlockParams;
+		  } = null;
 
 	private rafId: number | null = null;
 	private needsFrame = true;
@@ -49,10 +65,8 @@ export class ParticleBlocks {
 	private renderedOnce = false;
 
 	// Smooth “zoom” transition across discrete k steps (child-friendly).
-	private kAnimFrom = 0;
-	private kAnimTo = 0;
-	private kAnimStart = 0;
-	private kAnimDurMs = 340;
+	// Implemented as a looping 10× cross-zoom between consecutive k levels.
+	private kAnimDurMs = 360;
 
 	// cached per-instance base transforms
 	private negBases: Array<{ x: number; y: number; s: number }> = [];
@@ -91,68 +105,68 @@ export class ParticleBlocks {
 		this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -10, 10);
 		this.camera.position.set(0, 0, 1);
 
-		this.root = new THREE.Group();
-		this.scene.add(this.root);
-
 		const geo = new THREE.PlaneGeometry(1, 1);
 		const alphaTex = makeRoundedAlphaTexture();
-		const matNegBase = new THREE.MeshBasicMaterial({
-			color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
-			transparent: true,
-			opacity: 0.22, // clearer inactive grid (<= 0.5)
-			depthTest: false,
-			depthWrite: false,
-		});
-		const matNegActive = new THREE.MeshBasicMaterial({
-			color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
-			transparent: true,
-			opacity: 0.5, // <= 0.5 (max allowed)
-			depthTest: false,
-			depthWrite: false,
-		});
-		if (alphaTex) {
-			matNegBase.alphaMap = alphaTex;
-			matNegBase.alphaTest = 0.02;
-			matNegBase.needsUpdate = true;
-			matNegActive.alphaMap = alphaTex;
-			matNegActive.alphaTest = 0.02;
-			matNegActive.needsUpdate = true;
-		}
-		const matPosBase = new THREE.MeshBasicMaterial({
-			color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
-			transparent: true,
-			opacity: 0.22, // clearer inactive grid (<= 0.5)
-			depthTest: false,
-			depthWrite: false,
-		});
-		const matPosActive = new THREE.MeshBasicMaterial({
-			color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
-			transparent: true,
-			opacity: 0.5, // <= 0.5 (max allowed)
-			depthTest: false,
-			depthWrite: false,
-		});
-		if (alphaTex) {
-			matPosBase.alphaMap = alphaTex;
-			matPosBase.alphaTest = 0.02;
-			matPosBase.needsUpdate = true;
-			matPosActive.alphaMap = alphaTex;
-			matPosActive.alphaTest = 0.02;
-			matPosActive.needsUpdate = true;
-		}
 
-		// capacity upper bound per side: 10k blocks is fine
-		this.meshNegBase = new THREE.InstancedMesh(geo, matNegBase, 10000);
-		this.meshNegActive = new THREE.InstancedMesh(geo, matNegActive, 10000);
-		this.meshPosBase = new THREE.InstancedMesh(geo, matPosBase, 10000);
-		this.meshPosActive = new THREE.InstancedMesh(geo, matPosActive, 10000);
+		this.stage = new THREE.Group();
+		this.scene.add(this.stage);
 
-		for (const m of [this.meshNegBase, this.meshNegActive, this.meshPosBase, this.meshPosActive]) {
-			m.frustumCulled = false;
-		}
+		const makeField = () => {
+			const group = new THREE.Group();
+			const baseOpacity = 0.22;
+			const activeOpacity = 0.5;
 
-		// Draw inactive first, then active on top.
-		this.root.add(this.meshNegBase, this.meshPosBase, this.meshNegActive, this.meshPosActive);
+			const matNegBase = new THREE.MeshBasicMaterial({
+				color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
+				transparent: true,
+				opacity: baseOpacity,
+				depthTest: false,
+				depthWrite: false,
+			});
+			const matNegActive = new THREE.MeshBasicMaterial({
+				color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
+				transparent: true,
+				opacity: activeOpacity,
+				depthTest: false,
+				depthWrite: false,
+			});
+			const matPosBase = new THREE.MeshBasicMaterial({
+				color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
+				transparent: true,
+				opacity: baseOpacity,
+				depthTest: false,
+				depthWrite: false,
+			});
+			const matPosActive = new THREE.MeshBasicMaterial({
+				color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
+				transparent: true,
+				opacity: activeOpacity,
+				depthTest: false,
+				depthWrite: false,
+			});
+
+			if (alphaTex) {
+				for (const mat of [matNegBase, matNegActive, matPosBase, matPosActive]) {
+					mat.alphaMap = alphaTex;
+					mat.alphaTest = 0.02;
+					mat.needsUpdate = true;
+				}
+			}
+
+			const negBase = new THREE.InstancedMesh(geo, matNegBase, 10000);
+			const negActive = new THREE.InstancedMesh(geo, matNegActive, 10000);
+			const posBase = new THREE.InstancedMesh(geo, matPosBase, 10000);
+			const posActive = new THREE.InstancedMesh(geo, matPosActive, 10000);
+
+			for (const m of [negBase, negActive, posBase, posActive]) m.frustumCulled = false;
+			group.add(negBase, posBase, negActive, posActive);
+
+			return { group, negBase, negActive, posBase, posActive, baseOpacity, activeOpacity };
+		};
+
+		this.fields = [makeField(), makeField()];
+		this.stage.add(this.fields[0].group, this.fields[1].group);
+		this.fields[1].group.visible = false;
 
 		this.resize();
 		this.requestFrame();
@@ -164,20 +178,46 @@ export class ParticleBlocks {
 		const sizeChanged = nextW !== this.width || nextH !== this.height;
 		const kChanged = !this.params || this.params.k !== params.k;
 
+		if (!this.params) {
+			this.params = params;
+			this.width = nextW;
+			this.height = nextH;
+			this.activeField = 0;
+			this.fields[0].group.visible = true;
+			this.fields[1].group.visible = false;
+			this.kTransition = null;
+			this.layoutDirty = true;
+			this.requestFrame();
+			return;
+		}
+
 		if (kChanged) {
-			const now = performance.now();
-			const currentK = this.getAnimatedK(now);
-			this.kAnimFrom = currentK;
-			this.kAnimTo = params.k;
-			this.kAnimStart = now;
+			const nowMs = performance.now();
+			const dir = (params.k > this.params.k ? 1 : -1) as 1 | -1;
+			const fromField = this.activeField;
+			const toField = 1 - fromField;
+			this.kTransition = {
+				fromField,
+				toField,
+				dir,
+				startMs: nowMs,
+				durMs: this.kAnimDurMs,
+				fromParams: this.params,
+				toParams: params,
+			};
+			this.fields[toField].group.visible = true;
 		}
 
 		this.params = params;
+		// If we're mid-transition and the caller updates values (dragging), keep the target side in sync.
+		if (this.kTransition && params.k === this.kTransition.toParams.k) {
+			this.kTransition.toParams = params;
+		}
 		this.width = nextW;
 		this.height = nextH;
 
-		// Only rebuild the field layout if size or k changed; otherwise curtain reveal is just a cull window.
-		this.layoutDirty = this.layoutDirty || sizeChanged || kChanged;
+		// Only rebuild the field layout if size changed (k transition uses a pure 10× loop).
+		this.layoutDirty = this.layoutDirty || sizeChanged;
 		this.requestFrame();
 	}
 
@@ -207,14 +247,16 @@ export class ParticleBlocks {
 		this.destroyed = true;
 		if (this.rafId != null) cancelAnimationFrame(this.rafId);
 		this.rafId = null;
-		this.meshNegBase.geometry.dispose();
-		this.meshNegActive.geometry.dispose();
-		this.meshPosBase.geometry.dispose();
-		this.meshPosActive.geometry.dispose();
-		this.meshNegBase.material.dispose();
-		this.meshNegActive.material.dispose();
-		this.meshPosBase.material.dispose();
-		this.meshPosActive.material.dispose();
+		for (const f of this.fields) {
+			f.negBase.geometry.dispose();
+			f.negActive.geometry.dispose();
+			f.posBase.geometry.dispose();
+			f.posActive.geometry.dispose();
+			f.negBase.material.dispose();
+			f.negActive.material.dispose();
+			f.posBase.material.dispose();
+			f.posActive.material.dispose();
+		}
 		this.renderer.dispose();
 	}
 
@@ -232,8 +274,8 @@ export class ParticleBlocks {
 			this.ripples = this.ripples.filter((r) => t - r.start < 2.0);
 			this.renderFrame(t);
 
-			// Continue animating only while ripples are alive (or a layout update comes in).
-			if (this.ripples.length > 0 || this.layoutDirty) {
+			// Continue animating only while ripples are alive, a layout update comes in, or a k transition runs.
+			if (this.ripples.length > 0 || this.layoutDirty || this.kTransition) {
 				this.needsFrame = true;
 				this.rafId = requestAnimationFrame(loop);
 			}
@@ -243,10 +285,12 @@ export class ParticleBlocks {
 
 	private renderFrame(time: number) {
 		if (!this.params) {
-			this.meshNegBase.count = 0;
-			this.meshPosBase.count = 0;
-			this.meshNegActive.count = 0;
-			this.meshPosActive.count = 0;
+			for (const f of this.fields) {
+				f.negBase.count = 0;
+				f.posBase.count = 0;
+				f.negActive.count = 0;
+				f.posActive.count = 0;
+			}
 			this.renderer.render(this.scene, this.camera);
 			return;
 		}
@@ -254,44 +298,11 @@ export class ParticleBlocks {
 		if (this.layoutDirty) this.rebuildLayout();
 
 		const nowMs = time * 1000;
-		const kAnimated = this.getAnimatedK(nowMs);
-		const kTarget = this.params.k;
-		// Map k to a gentle visual zoom so each discrete k±1 feels “alive”.
-		// Larger k -> slightly tighter (zoomed-out) particle field.
-		const scaleFor = (k: number) => Math.pow(10, -k * 0.035);
-		const prog = this.kAnimStart > 0 ? clamp((nowMs - this.kAnimStart) / this.kAnimDurMs, 0, 1) : 1;
-		const pulse = 1 + 0.10 * Math.sin(Math.PI * prog);
-		const fieldScale = scaleFor(kAnimated) * pulse;
-
-		// Apply smooth zoom to the whole particle field around the center.
 		const midX = this.params.midX;
-		const midYUp = this.height * 0.5;
-		this.root.position.set(midX, midYUp, 0);
-		this.root.scale.set(fieldScale, fieldScale, 1);
+		const midY = this.height * 0.5; // y-up center
+		this.stage.position.set(midX, midY, 0);
 
-		// Value → active particle count. Each particle represents a power-of-10 unit.
-		// Max is 100×100 = 10k.
-		const unitPow = Math.max(0, this.params.k - 4);
-		const unitValue = Math.pow(10, unitPow);
-		const negValue = Math.min(this.params.valueA, this.params.valueB, 0);
-		const posValue = Math.max(this.params.valueA, this.params.valueB, 0);
-		const targetNegCount = clampInt(Math.floor(Math.abs(Math.trunc(negValue)) / unitValue), 0, 10000);
-		const targetPosCount = clampInt(Math.floor(Math.abs(Math.trunc(posValue)) / unitValue), 0, 10000);
-
-		// When no ripples, we only need to change mesh.count (matrices already baked).
 		const hasRipples = this.ripples.length > 0;
-		this.meshNegActive.count = targetNegCount;
-		this.meshPosActive.count = targetPosCount;
-		this.lastNegCount = targetNegCount;
-		this.lastPosCount = targetPosCount;
-
-		if (!hasRipples) {
-			this.renderer.render(this.scene, this.camera);
-			this.renderedOnce = true;
-			if (Math.abs(kAnimated - kTarget) > 1e-3) this.requestFrame();
-			return;
-		}
-
 		const waveAt = (x: number, y: number) => {
 			let wave = 0;
 			for (const r of this.ripples) {
@@ -300,7 +311,6 @@ export class ParticleBlocks {
 				const dx = x - r.x;
 				const dy = y - r.y;
 				const d = Math.hypot(dx, dy);
-				// Stronger / clearer ripples (still lightweight CPU-side)
 				const w = Math.sin(d * 0.07 - dt * 8.2);
 				const env = Math.exp(-dt * 0.85) * Math.exp(-d * 0.012);
 				wave += w * env;
@@ -308,36 +318,122 @@ export class ParticleBlocks {
 			return wave;
 		};
 
-		const tmp = new THREE.Object3D();
+		const applyCounts = (field: (typeof this.fields)[number], p: BlockParams) => {
+			const unitPow = Math.max(0, p.k - 4);
+			const unitValue = Math.pow(10, unitPow);
+			const negValue = Math.min(p.valueA, p.valueB, 0);
+			const posValue = Math.max(p.valueA, p.valueB, 0);
+			const negCount = clampInt(Math.floor(Math.abs(Math.trunc(negValue)) / unitValue), 0, 10000);
+			const posCount = clampInt(Math.floor(Math.abs(Math.trunc(posValue)) / unitValue), 0, 10000);
+			field.negActive.count = negCount;
+			field.posActive.count = posCount;
+			return { negCount, posCount };
+		};
 
-		// Ripple animation: only update the active instances (count may be < 10k).
-		for (let i = 0; i < targetNegCount; i++) {
-			const b = this.negBases[i];
-			const w = waveAt(midX + b.x * fieldScale, midYUp + b.y * fieldScale);
-			const s = b.s * (1 + clamp(w, -0.55, 0.75));
-			tmp.position.set(b.x, b.y, 0);
-			tmp.scale.set(s, s, 1);
-			tmp.updateMatrix();
-			this.meshNegActive.setMatrixAt(i, tmp.matrix);
-		}
-		this.meshNegActive.instanceMatrix.needsUpdate = true;
+		const setFieldAlpha = (field: (typeof this.fields)[number], a: number) => {
+			const base = clamp(a, 0, 1) * field.baseOpacity;
+			const active = clamp(a, 0, 1) * field.activeOpacity;
+			(field.negBase.material as THREE.MeshBasicMaterial).opacity = base;
+			(field.posBase.material as THREE.MeshBasicMaterial).opacity = base;
+			(field.negActive.material as THREE.MeshBasicMaterial).opacity = active;
+			(field.posActive.material as THREE.MeshBasicMaterial).opacity = active;
+		};
 
-		for (let i = 0; i < targetPosCount; i++) {
-			const b = this.posBases[i];
-			const w = waveAt(midX + b.x * fieldScale, midYUp + b.y * fieldScale);
-			const s = b.s * (1 + clamp(w, -0.55, 0.75));
-			tmp.position.set(b.x, b.y, 0);
-			tmp.scale.set(s, s, 1);
-			tmp.updateMatrix();
-			this.meshPosActive.setMatrixAt(i, tmp.matrix);
+		const updateRippleMatrices = (
+			field: (typeof this.fields)[number],
+			scale: number,
+			negCount: number,
+			posCount: number,
+		) => {
+			if (!hasRipples) return;
+			const tmp = new THREE.Object3D();
+
+			for (let i = 0; i < negCount; i++) {
+				const b = this.negBases[i];
+				const w = waveAt(midX + b.x * scale, midY + b.y * scale);
+				const s = b.s * (1 + clamp(w, -0.55, 0.75));
+				tmp.position.set(b.x, b.y, 0);
+				tmp.scale.set(s, s, 1);
+				tmp.updateMatrix();
+				field.negActive.setMatrixAt(i, tmp.matrix);
+			}
+			field.negActive.instanceMatrix.needsUpdate = true;
+
+			for (let i = 0; i < posCount; i++) {
+				const b = this.posBases[i];
+				const w = waveAt(midX + b.x * scale, midY + b.y * scale);
+				const s = b.s * (1 + clamp(w, -0.55, 0.75));
+				tmp.position.set(b.x, b.y, 0);
+				tmp.scale.set(s, s, 1);
+				tmp.updateMatrix();
+				field.posActive.setMatrixAt(i, tmp.matrix);
+			}
+			field.posActive.instanceMatrix.needsUpdate = true;
+		};
+
+		if (this.kTransition) {
+			const tr = this.kTransition;
+			const t = clamp((nowMs - tr.startMs) / tr.durMs, 0, 1);
+			const e = this.easeInOutCubic(t);
+			const fromScale = Math.pow(10, -tr.dir * e);
+			const toScale = Math.pow(10, tr.dir * (1 - e));
+
+			const fromField = this.fields[tr.fromField];
+			const toField = this.fields[tr.toField];
+
+			fromField.group.visible = true;
+			toField.group.visible = true;
+			fromField.group.scale.set(fromScale, fromScale, 1);
+			toField.group.scale.set(toScale, toScale, 1);
+
+			setFieldAlpha(fromField, 1 - e);
+			setFieldAlpha(toField, e);
+
+			const fromCounts = applyCounts(fromField, tr.fromParams);
+			const toCounts = applyCounts(toField, tr.toParams);
+			this.lastNegCount = toCounts.negCount;
+			this.lastPosCount = toCounts.posCount;
+
+			updateRippleMatrices(fromField, fromScale, fromCounts.negCount, fromCounts.posCount);
+			updateRippleMatrices(toField, toScale, toCounts.negCount, toCounts.posCount);
+
+			this.renderer.render(this.scene, this.camera);
+			this.renderedOnce = true;
+
+			if (t >= 1) {
+				this.activeField = tr.toField;
+				this.kTransition = null;
+				const other = this.fields[1 - this.activeField];
+				other.group.visible = false;
+				other.group.scale.set(1, 1, 1);
+				setFieldAlpha(other, 0);
+
+				const active = this.fields[this.activeField];
+				active.group.scale.set(1, 1, 1);
+				setFieldAlpha(active, 1);
+				applyCounts(active, tr.toParams);
+			}
+
+			// keep running while transition is active
+			if (this.kTransition) this.requestFrame();
+			return;
 		}
-		this.meshPosActive.instanceMatrix.needsUpdate = true;
+
+		// No k transition: show one stable field at scale=1.
+		const active = this.fields[this.activeField];
+		const other = this.fields[1 - this.activeField];
+		active.group.visible = true;
+		other.group.visible = false;
+		active.group.scale.set(1, 1, 1);
+		setFieldAlpha(active, 1);
+
+		const counts = applyCounts(active, this.params);
+		this.lastNegCount = counts.negCount;
+		this.lastPosCount = counts.posCount;
+		updateRippleMatrices(active, 1, counts.negCount, counts.posCount);
 
 		this.renderer.render(this.scene, this.camera);
 		this.renderedOnce = true;
-
-		// Keep animating while k is transitioning.
-		if (Math.abs(kAnimated - kTarget) > 1e-3) this.requestFrame();
 	}
 
 	private rebuildLayout() {
@@ -409,38 +505,33 @@ export class ParticleBlocks {
 		buildField(0, midX, this.negBases, "left");
 		buildField(midX, this.width, this.posBases, "right");
 
-		// Bake static matrices once. Active mesh reuses these unless a ripple is animating.
+		// Bake static matrices to both fields. Active meshes reuse these unless a ripple is animating.
 		const tmp = new THREE.Object3D();
-		for (let i = 0; i < this.negBases.length; i++) {
-			const b = this.negBases[i];
-			tmp.position.set(b.x, b.y, 0);
-			tmp.scale.set(b.s, b.s, 1);
-			tmp.updateMatrix();
-			this.meshNegBase.setMatrixAt(i, tmp.matrix);
-			this.meshNegActive.setMatrixAt(i, tmp.matrix);
-		}
-		for (let i = 0; i < this.posBases.length; i++) {
-			const b = this.posBases[i];
-			tmp.position.set(b.x, b.y, 0);
-			tmp.scale.set(b.s, b.s, 1);
-			tmp.updateMatrix();
-			this.meshPosBase.setMatrixAt(i, tmp.matrix);
-			this.meshPosActive.setMatrixAt(i, tmp.matrix);
-		}
-		this.meshNegBase.count = Math.min(this.negBases.length, 10000);
-		this.meshPosBase.count = Math.min(this.posBases.length, 10000);
-		this.meshNegBase.instanceMatrix.needsUpdate = true;
-		this.meshPosBase.instanceMatrix.needsUpdate = true;
-		this.meshNegActive.instanceMatrix.needsUpdate = true;
-		this.meshPosActive.instanceMatrix.needsUpdate = true;
-	}
+		for (const f of this.fields) {
+			for (let i = 0; i < this.negBases.length; i++) {
+				const b = this.negBases[i];
+				tmp.position.set(b.x, b.y, 0);
+				tmp.scale.set(b.s, b.s, 1);
+				tmp.updateMatrix();
+				f.negBase.setMatrixAt(i, tmp.matrix);
+				f.negActive.setMatrixAt(i, tmp.matrix);
+			}
+			for (let i = 0; i < this.posBases.length; i++) {
+				const b = this.posBases[i];
+				tmp.position.set(b.x, b.y, 0);
+				tmp.scale.set(b.s, b.s, 1);
+				tmp.updateMatrix();
+				f.posBase.setMatrixAt(i, tmp.matrix);
+				f.posActive.setMatrixAt(i, tmp.matrix);
+			}
 
-	private getAnimatedK(nowMs: number) {
-		// If we never animated yet, snap to target.
-		if (this.kAnimStart <= 0) return this.kAnimTo;
-		const t = clamp((nowMs - this.kAnimStart) / this.kAnimDurMs, 0, 1);
-		const e = this.easeInOutCubic(t);
-		return this.kAnimFrom + (this.kAnimTo - this.kAnimFrom) * e;
+			f.negBase.count = Math.min(this.negBases.length, 10000);
+			f.posBase.count = Math.min(this.posBases.length, 10000);
+			f.negBase.instanceMatrix.needsUpdate = true;
+			f.posBase.instanceMatrix.needsUpdate = true;
+			f.negActive.instanceMatrix.needsUpdate = true;
+			f.posActive.instanceMatrix.needsUpdate = true;
+		}
 	}
 
 	private easeInOutCubic(t: number) {

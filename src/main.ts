@@ -155,11 +155,13 @@ function render() {
 	if (transition) {
 		// Cross-zoom: scale + crossfade tick/label layers so the ruler feels “infinite”.
 		const fromVm = transition.fromEngine.numberLine.buildViewModel(transition.fromEngine.width);
-		const deltaK = transition.toK - transition.fromK;
-		const s = Math.pow(0.72, deltaK);
+		const dir = Math.sign(transition.toK - transition.fromK) || 1;
 		const ease = ball.ease;
-		const fromScale = Math.pow(s, ease);
-		const toScale = Math.pow(s, -(1 - ease));
+		// Always the same loop per step: scale by exactly 10× between adjacent k levels.
+		// k+1 (zoom out): old 1 -> 0.1, new 10 -> 1
+		// k-1 (zoom in):  old 1 -> 10,  new 0.1 -> 1
+		const fromScale = Math.pow(10, -dir * ease);
+		const toScale = Math.pow(10, dir * (1 - ease));
 
 		layers.overlay.appendChild(
 			renderRulerLayer(fromVm, transition.fromEngine.numberLine.biggestTickPatternValue, labelsOpacity.from, transition.fromK, fromScale),
