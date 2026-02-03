@@ -166,6 +166,14 @@ function render() {
 	renderTickLabels(vm, labelsOpacity.to, state.k);
 
 	const { xA, xB } = ball;
+	layers.overlay.appendChild(renderValueFollower(xA, formatValue(state.valueA, state.fullNumber, state.k), "a", engine.width));
+	if (!state.symmetric) {
+		layers.overlay.appendChild(renderValueFollower(xB, formatValue(state.valueB, state.fullNumber, state.k), "b", engine.width));
+	} else {
+		layers.overlay.appendChild(
+			renderValueFollower(xB, formatValue(state.valueB, state.fullNumber, state.k), "b", engine.width, true),
+		);
+	}
 	layers.overlay.appendChild(renderBall(xA, "a", labelsOpacity.from, labelsOpacity.to));
 	layers.overlay.appendChild(renderBall(xB, "b", labelsOpacity.from, labelsOpacity.to));
 
@@ -351,6 +359,40 @@ function renderBall(x: number, which: "a" | "b", fromOpacity: number, toOpacity:
 
 	wrap.append(line, ghost, knob, hit);
 	return wrap;
+}
+
+function renderValueFollower(
+	x: number,
+	label: string,
+	which: "a" | "b",
+	width: number,
+	subtle = false,
+): HTMLElement {
+	const el = document.createElement("div");
+	el.className = "absolute top-3 -translate-x-1/2 select-none";
+	el.style.pointerEvents = "none";
+	el.style.left = `${clamp(x, 24, width - 24)}px`;
+
+	const color =
+		which === "a"
+			? { bg: "rgba(251,207,232,0.88)", border: "rgba(219,39,119,0.55)", text: "rgb(136, 19, 55)" }
+			: { bg: "rgba(221,214,254,0.86)", border: "rgba(109,40,217,0.50)", text: "rgb(76, 29, 149)" };
+
+	el.style.background = color.bg;
+	el.style.border = `1px solid ${color.border}`;
+	el.style.color = color.text;
+	el.style.padding = subtle ? "6px 10px" : "7px 12px";
+	el.style.borderRadius = "999px";
+	el.style.fontSize = subtle ? "12px" : "13px";
+	el.style.fontWeight = subtle ? "600" : "700";
+	el.style.letterSpacing = "-0.01em";
+	el.style.backdropFilter = "blur(10px)";
+	el.style.boxShadow = subtle
+		? "0 1px 1px rgba(15,23,42,0.06), 0 6px 18px rgba(236,72,153,0.06)"
+		: "0 1px 1px rgba(15,23,42,0.06), 0 10px 24px rgba(236,72,153,0.10)";
+	el.style.opacity = subtle ? "0.82" : "0.95";
+	el.textContent = label;
+	return el;
 }
 
 function valueToXWithEngine(value: number, eng: LadderEngine): number {
