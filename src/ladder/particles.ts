@@ -389,8 +389,19 @@ export class ParticleBlocks {
 			setFieldAlpha(fromField, 1 - e);
 			setFieldAlpha(toField, e);
 
-			const fromCounts = applyCounts(fromField, tr.fromParams);
-			const toCounts = applyCounts(toField, tr.toParams);
+			// Ease active counts to avoid “popping” while scaling.
+			const fromCountsFull = applyCounts(fromField, tr.fromParams);
+			const toCountsFull = applyCounts(toField, tr.toParams);
+			const fromCounts = {
+				negCount: fromCountsFull.negCount,
+				posCount: fromCountsFull.posCount,
+			};
+			const toCounts = {
+				negCount: clampInt(Math.round(toCountsFull.negCount * e), 0, 10000),
+				posCount: clampInt(Math.round(toCountsFull.posCount * e), 0, 10000),
+			};
+			toField.negActive.count = toCounts.negCount;
+			toField.posActive.count = toCounts.posCount;
 			this.lastNegCount = toCounts.negCount;
 			this.lastPosCount = toCounts.posCount;
 

@@ -169,8 +169,11 @@ function render() {
 		layers.overlay.appendChild(
 			renderRulerLayer(vm, engine.numberLine.biggestTickPatternValue, labelsOpacity.to, state.k, toScale),
 		);
+		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, labelsOpacity.from, fromScale));
+		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, labelsOpacity.to, toScale));
 	} else {
 		layers.overlay.appendChild(renderRulerLayer(vm, engine.numberLine.biggestTickPatternValue, 1, state.k, 1));
+		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, 1, 1));
 	}
 
 	const { xA, xB } = ball;
@@ -328,6 +331,43 @@ function renderRulerLayer(
 			layer.appendChild(renderTickLabel(t.position, formatValue(t.value, state.fullNumber, kForLabels), opacity));
 		}
 	}
+	return layer;
+}
+
+function renderVerticalRulerLayer(midX: number, height: number, opacity: number, scale: number) {
+	const layer = document.createElement("div");
+	layer.className = "absolute inset-0";
+	layer.style.pointerEvents = "none";
+	layer.style.opacity = String(opacity);
+	layer.style.transformOrigin = "50% 50%";
+	layer.style.transform = `scale(1, ${scale})`;
+	layer.style.willChange = "transform, opacity";
+
+	// Center line
+	const line = document.createElement("div");
+	line.className = "absolute top-0 bottom-0 w-px";
+	line.style.left = `${midX}px`;
+	line.style.background = "rgba(15, 23, 42, 0.10)";
+	layer.appendChild(line);
+
+	// Tick ladder: subtle, symmetric, no numbers (just to sell “infinite canvas”)
+	const midY = height / 2;
+	const step = 28;
+	const maxN = Math.ceil(height / step);
+	for (let i = -maxN; i <= maxN; i++) {
+		const y = midY + i * step;
+		if (y < 0 || y > height) continue;
+		const isMajor = i % 5 === 0;
+		const tick = document.createElement("div");
+		tick.className = "absolute h-px";
+		tick.style.left = `${midX}px`;
+		tick.style.top = `${y}px`;
+		tick.style.width = isMajor ? "22px" : "12px";
+		tick.style.transform = "translateX(-50%)";
+		tick.style.background = isMajor ? "rgba(15, 23, 42, 0.16)" : "rgba(15, 23, 42, 0.10)";
+		layer.appendChild(tick);
+	}
+
 	return layer;
 }
 
