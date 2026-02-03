@@ -296,40 +296,50 @@ function renderVerticalRulerLayer(midX: number, height: number, opacity: number,
 	layer.className = "absolute inset-0";
 	layer.style.pointerEvents = "none";
 	layer.style.opacity = String(opacity);
-	layer.style.transformOrigin = "50% 50%";
+
+	const topPad = 56;
+	const bottomPad = 92;
+	const baseY = clamp(height - bottomPad, 0, height);
+	const topY = clamp(topPad, 0, height);
+	const originPct = height <= 0 ? 50 : (baseY / height) * 100;
+
+	// Scale around the bottom origin (0 at baseY), so it feels consistent with horizontal 10× zoom loop.
+	layer.style.transformOrigin = `50% ${originPct.toFixed(2)}%`;
 	layer.style.transform = `scale(1, ${scale})`;
 	layer.style.willChange = "transform, opacity";
 
 	// Center line
 	const line = document.createElement("div");
-	line.className = "absolute top-0 bottom-0 w-px";
+	line.className = "absolute w-px";
 	line.style.left = `${midX}px`;
+	line.style.top = `${topY}px`;
+	line.style.bottom = `${height - baseY}px`;
 	line.style.background = "rgba(15, 23, 42, 0.10)";
 	layer.appendChild(line);
 
-	// Tick ladder: symmetric with labels matching horizontal formatting.
-	const midY = height / 2;
-	const topPad = 52;
-	const bottomPad = 92;
-	const usable = Math.max(120, height - topPad - bottomPad);
-	const span = usable * 0.40;
-
+	// Vertical ruler: origin at bottom, no negatives. Labels match horizontal formatting.
+	const usable = Math.max(80, baseY - topY);
 	const max = kForLabels === 0 ? 1 : Math.pow(10, kForLabels);
 	const half = max / 2;
 
-	const marks: Array<{ v: number; y: number; major: boolean; label: string }> = [
-		{ v: max, y: midY - span, major: true, label: formatValue(max, state.fullNumber, kForLabels) },
-		{ v: half, y: midY - span / 2, major: false, label: formatValue(half, state.fullNumber, kForLabels) },
-		{ v: 0, y: midY, major: true, label: "0" },
-		{ v: -half, y: midY + span / 2, major: false, label: formatValue(-half, state.fullNumber, kForLabels) },
-		{ v: -max, y: midY + span, major: true, label: formatValue(-max, state.fullNumber, kForLabels) },
+	const yForValue = (v: number) => {
+		const t = max <= 0 ? 0 : clamp(v / max, 0, 1);
+		return baseY - t * usable;
+	};
+
+	const marks: Array<{ v: number; major: boolean; label: string }> = [
+		{ v: 0, major: true, label: "0" },
+		{ v: half, major: false, label: formatValue(half, state.fullNumber, kForLabels) },
+		{ v: max, major: true, label: formatValue(max, state.fullNumber, kForLabels) },
 	];
 
 	for (const m of marks) {
+		const y = clamp(yForValue(m.v), topY, baseY);
+
 		const tick = document.createElement("div");
 		tick.className = "absolute h-px";
 		tick.style.left = `${midX}px`;
-		tick.style.top = `${clamp(m.y, 8, height - 8)}px`;
+		tick.style.top = `${y}px`;
 		tick.style.width = m.major ? "28px" : "18px";
 		tick.style.transform = "translateX(-50%)";
 		tick.style.background = m.major ? "rgba(15, 23, 42, 0.18)" : "rgba(15, 23, 42, 0.12)";
@@ -338,7 +348,7 @@ function renderVerticalRulerLayer(midX: number, height: number, opacity: number,
 		const label = document.createElement("div");
 		label.className = "absolute -translate-y-1/2 whitespace-nowrap rounded-md bg-white/70 px-1.5 py-0.5 text-xs text-slate-700 backdrop-blur";
 		label.style.left = `${midX + 18}px`;
-		label.style.top = `${clamp(m.y, 8, height - 8)}px`;
+		label.style.top = `${y}px`;
 		label.style.opacity = String(opacity);
 		label.textContent = m.label;
 		layer.appendChild(label);
