@@ -42,6 +42,12 @@ export class ParticleBlocks {
 	private layoutDirty = true;
 	private renderedOnce = false;
 
+	// Smooth “zoom” transition across discrete k steps (child-friendly).
+	private kAnimFrom = 0;
+	private kAnimTo = 0;
+	private kAnimStart = 0;
+	private kAnimDurMs = 340;
+
 	// cached per-instance base transforms
 	private negBases: Array<{ x: number; y: number; s: number }> = [];
 	private posBases: Array<{ x: number; y: number; s: number }> = [];
@@ -119,6 +125,14 @@ export class ParticleBlocks {
 		const sizeChanged = nextW !== this.width || nextH !== this.height;
 		const kChanged = !this.params || this.params.k !== params.k;
 
+		if (kChanged) {
+			const now = performance.now();
+			const currentK = this.getAnimatedK(now);
+			this.kAnimFrom = currentK;
+			this.kAnimTo = params.k;
+			this.kAnimStart = now;
+		}
+
 		this.params = params;
 		this.width = nextW;
 		this.height = nextH;
@@ -193,6 +207,14 @@ export class ParticleBlocks {
 
 		if (this.layoutDirty) this.rebuildLayout();
 
+		const nowMs = time * 1000;
+		const kAnimated = this.getAnimatedK(nowMs);
+		const kTarget = this.params.k;
+		// Map k to a gentle visual zoom so each discrete k±1 feels “alive”.
+		// Larger k -> slightly tighter (zoomed-out) particle field.
+		const scaleFor = (k: number) => Math.pow(10, -k * 0.035);
+		const fieldScale = scaleFor(kAnimated);
+
 		const waveAt = (x: number, y: number) => {
 			let wave = 0;
 			for (const r of this.ripples) {
@@ -217,15 +239,18 @@ export class ParticleBlocks {
 		// Curtain reveal window: covered regions do NOT get ripple calculations.
 		const negMinX = clamp(leftMost, 0, midX);
 		const posMaxX = clamp(rightMost, midX, this.width);
+		const midY = this.height * 0.5;
 
 		let outNeg = 0;
 		for (let i = 0; i < this.negBases.length; i++) {
 			const b = this.negBases[i];
-			if (b.x < negMinX) continue;
-			const w = waveAt(b.x, b.y);
+			const xT = midX + (b.x - midX) * fieldScale;
+			if (xT < negMinX) continue;
+			const yT = midY + (b.y - midY) * fieldScale;
+			const w = waveAt(xT, yT);
 			const scale = b.s * (1 + clamp(w, -0.55, 0.75));
-			tmp.position.set(b.x, this.height - b.y, 0);
-			tmp.scale.set(scale, scale, 1);
+			tmp.position.set(xT, this.height - yT, 0);
+			tmp.scale.set(scale * fieldScale, scale * fieldScale, 1);
 			tmp.updateMatrix();
 			this.meshNeg.setMatrixAt(outNeg++, tmp.matrix);
 		}
@@ -235,11 +260,13 @@ export class ParticleBlocks {
 		let outPos = 0;
 		for (let i = 0; i < this.posBases.length; i++) {
 			const b = this.posBases[i];
-			if (b.x > posMaxX) continue;
-			const w = waveAt(b.x, b.y);
+			const xT = midX + (b.x - midX) * fieldScale;
+			if (xT > posMaxX) continue;
+			const yT = midY + (b.y - midY) * fieldScale;
+			const w = waveAt(xT, yT);
 			const scale = b.s * (1 + clamp(w, -0.55, 0.75));
-			tmp.position.set(b.x, this.height - b.y, 0);
-			tmp.scale.set(scale, scale, 1);
+			tmp.position.set(xT, this.height - yT, 0);
+			tmp.scale.set(scale * fieldScale, scale * fieldScale, 1);
 			tmp.updateMatrix();
 			this.meshPos.setMatrixAt(outPos++, tmp.matrix);
 		}
@@ -248,6 +275,9 @@ export class ParticleBlocks {
 
 		this.renderer.render(this.scene, this.camera);
 		this.renderedOnce = true;
+
+		// Keep animating while k is transitioning.
+		if (Math.abs(kAnimated - kTarget) > 1e-3) this.requestFrame();
 	}
 
 	private rebuildLayout() {
@@ -314,6 +344,18 @@ export class ParticleBlocks {
 			this.meshNeg.count = Math.min(this.negBases.length, 10000);
 			this.meshPos.count = Math.min(this.posBases.length, 10000);
 		}
+	}
+
+	private getAnimatedK(nowMs: number) {
+		// If we never animated yet, snap to target.
+		if (this.kAnimStart <= 0) return this.kAnimTo;
+		const t = clamp((nowMs - this.kAnimStart) / this.kAnimDurMs, 0, 1);
+		const e = this.easeInOutCubic(t);
+		return this.kAnimFrom + (this.kAnimTo - this.kAnimFrom) * e;
+	}
+
+	private easeInOutCubic(t: number) {
+		return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 	}
 }
 
