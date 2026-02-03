@@ -74,6 +74,17 @@ export class ParticleBlocks {
 	private lastNegCount = 0;
 	private lastPosCount = 0;
 
+	// Layout meta for local hit→grid mapping (approx).
+	private layoutMeta: null | { cell: number; padAxis: number; oy: number } = null;
+
+	// Track which base instances were deformed by ripples so we can restore them.
+	private dirtyNeg = new Int32Array(10000);
+	private dirtyPos = new Int32Array(10000);
+	private dirtyNegLen = 0;
+	private dirtyPosLen = 0;
+	private dirtyNegMark = new Uint8Array(10000);
+	private dirtyPosMark = new Uint8Array(10000);
+
 	constructor(private host: HTMLElement, private beforeEl?: Element) {
 		this.canvas = document.createElement("canvas");
 		this.canvas.className = "nl-particles";
@@ -274,8 +285,9 @@ export class ParticleBlocks {
 			this.ripples = this.ripples.filter((r) => t - r.start < 2.0);
 			this.renderFrame(t);
 
-			// Continue animating only while ripples are alive, a layout update comes in, or a k transition runs.
-			if (this.ripples.length > 0 || this.layoutDirty || this.kTransition) {
+			// Continue animating only while ripples are alive, we need to restore deformations,
+			// a layout update comes in, or a k transition runs.
+			if (this.ripples.length > 0 || this.dirtyNegLen > 0 || this.dirtyPosLen > 0 || this.layoutDirty || this.kTransition) {
 				this.needsFrame = true;
 				this.rafId = requestAnimationFrame(loop);
 			}
@@ -316,6 +328,38 @@ export class ParticleBlocks {
 				wave += w * env;
 			}
 			return wave;
+		};
+
+		const restoreBaseIfNeeded = () => {
+			if (hasRipples) return;
+			if (this.dirtyNegLen === 0 && this.dirtyPosLen === 0) return;
+
+			const tmp = new THREE.Object3D();
+			for (const f of this.fields) {
+				for (let i = 0; i < this.dirtyNegLen; i++) {
+					const idx = this.dirtyNeg[i];
+					const b = this.negBases[idx];
+					tmp.position.set(b.x, b.y, 0);
+					tmp.scale.set(b.s, b.s, 1);
+					tmp.updateMatrix();
+					f.negBase.setMatrixAt(idx, tmp.matrix);
+				}
+				for (let i = 0; i < this.dirtyPosLen; i++) {
+					const idx = this.dirtyPos[i];
+					const b = this.posBases[idx];
+					tmp.position.set(b.x, b.y, 0);
+					tmp.scale.set(b.s, b.s, 1);
+					tmp.updateMatrix();
+					f.posBase.setMatrixAt(idx, tmp.matrix);
+				}
+				f.negBase.instanceMatrix.needsUpdate = true;
+				f.posBase.instanceMatrix.needsUpdate = true;
+			}
+
+			this.dirtyNegMark.fill(0);
+			this.dirtyPosMark.fill(0);
+			this.dirtyNegLen = 0;
+			this.dirtyPosLen = 0;
 		};
 
 		const applyCounts = (field: (typeof this.fields)[number], p: BlockParams) => {
@@ -410,6 +454,10 @@ export class ParticleBlocks {
 			updateRippleMatrices(fromField, fromScale, fromCounts.negCount, fromCounts.posCount);
 			updateRippleMatrices(toField, toScale, toCounts.negCount, toCounts.posCount);
 
+			// Also deform the *base* field locally so ripples are visible everywhere (not just “active count”).
+			this.deformBaseLocally(fromField, fromScale, waveAt, time);
+			this.deformBaseLocally(toField, toScale, waveAt, time);
+
 			this.renderer.render(this.scene, this.camera);
 			this.renderedOnce = true;
 
@@ -444,6 +492,8 @@ export class ParticleBlocks {
 		this.lastNegCount = counts.negCount;
 		this.lastPosCount = counts.posCount;
 		updateRippleMatrices(active, 1, counts.negCount, counts.posCount);
+		this.deformBaseLocally(active, 1, waveAt, time);
+		restoreBaseIfNeeded();
 
 		this.renderer.render(this.scene, this.camera);
 		this.renderedOnce = true;
@@ -492,6 +542,9 @@ export class ParticleBlocks {
 
 			// No vertical centering gap — start from top and tile through height.
 			const oy = gy;
+
+			// Save for ripple-local deformation mapping (same for both sides since midX splits evenly).
+			this.layoutMeta = { cell, padAxis, oy };
 
 			for (let row = 0; row < dim; row++) {
 				for (let colFill = 0; colFill < dim; colFill++) {
@@ -542,6 +595,83 @@ export class ParticleBlocks {
 			f.negActive.instanceMatrix.needsUpdate = true;
 			f.posActive.instanceMatrix.needsUpdate = true;
 		}
+	}
+
+	private deformBaseLocally(
+		field: (typeof this.fields)[number],
+		fieldScale: number,
+		waveAt: (x: number, y: number) => number,
+		timeSec: number,
+	) {
+		if (this.ripples.length === 0 || !this.layoutMeta) return;
+
+		const midX = this.params?.midX ?? this.width / 2;
+		const midY = this.height * 0.5;
+		const { cell, padAxis, oy } = this.layoutMeta;
+
+		// Compute affected grid window per ripple, update only those indices.
+		const radiusPx = 220;
+		const radiusLocal = radiusPx / Math.max(1e-3, fieldScale);
+		const radiusCells = clampInt(Math.ceil(radiusLocal / cell) + 2, 3, 40);
+
+		const y0 = this.height * 0.5 - oy; // approx inversion constant
+
+		const tmp = new THREE.Object3D();
+		const deform = (idx: number, base: { x: number; y: number; s: number }, mesh: THREE.InstancedMesh) => {
+			const w = waveAt(midX + base.x * fieldScale, midY + base.y * fieldScale);
+			// Smaller amplitude for base grid (so it doesn't overpower active count).
+			const s = base.s * (1 + clamp(w, -0.25, 0.35));
+			tmp.position.set(base.x, base.y, 0);
+			tmp.scale.set(s, s, 1);
+			tmp.updateMatrix();
+			mesh.setMatrixAt(idx, tmp.matrix);
+		};
+
+		for (const r of this.ripples) {
+			// Convert ripple center to local coords (relative center) for index estimation.
+			const lx = (r.x - midX) / Math.max(1e-3, fieldScale);
+			const ly = (r.y - midY) / Math.max(1e-3, fieldScale);
+
+			// Right side (positive): lx > 0. Left side (negative): lx < 0.
+			const side = lx >= 0 ? "pos" : "neg";
+			const ax = Math.abs(lx);
+			const colCenter = clampInt(Math.floor((ax - padAxis) / cell), 0, 99);
+			const rowCenter = clampInt(Math.floor((y0 - ly) / cell), 0, 99);
+
+			const colMin = clampInt(colCenter - radiusCells, 0, 99);
+			const colMax = clampInt(colCenter + radiusCells, 0, 99);
+			const rowMin = clampInt(rowCenter - radiusCells, 0, 99);
+			const rowMax = clampInt(rowCenter + radiusCells, 0, 99);
+
+			if (side === "neg") {
+				for (let row = rowMin; row <= rowMax; row++) {
+					for (let col = colMin; col <= colMax; col++) {
+						const idx = row * 100 + col;
+						if (this.dirtyNegMark[idx] === 0) {
+							this.dirtyNegMark[idx] = 1;
+							this.dirtyNeg[this.dirtyNegLen++] = idx;
+						}
+						deform(idx, this.negBases[idx], field.negBase);
+					}
+				}
+				field.negBase.instanceMatrix.needsUpdate = true;
+			} else {
+				for (let row = rowMin; row <= rowMax; row++) {
+					for (let col = colMin; col <= colMax; col++) {
+						const idx = row * 100 + col;
+						if (this.dirtyPosMark[idx] === 0) {
+							this.dirtyPosMark[idx] = 1;
+							this.dirtyPos[this.dirtyPosLen++] = idx;
+						}
+						deform(idx, this.posBases[idx], field.posBase);
+					}
+				}
+				field.posBase.instanceMatrix.needsUpdate = true;
+			}
+		}
+
+		// Keep animating while ripples are alive.
+		if (this.ripples.length > 0 && timeSec) this.requestFrame();
 	}
 
 	private easeInOutQuint(t: number) {
