@@ -466,55 +466,50 @@ export class ParticleBlocks {
 		const gy = regionTop + marginY;
 		const gh = Math.max(1, regionH - marginY * 2);
 
-		const buildField = (
-			start: number,
-			end: number,
+		const buildFieldFromAxis = (
 			into: Array<{ x: number; y: number; s: number }>,
 			side: "left" | "right",
 		) => {
-			const w = Math.max(0, end - start);
-			if (w < 24) return;
-
-			const gx = start + marginX;
-			const gw = Math.max(1, w - marginX * 2);
-
 			// Full regular field: fixed 100×100, with visible 10×10 boundaries.
 			const dim = 100;
 			const chunk = 10;
 			const gaps = dim / chunk - 1; // 9
 			const gapFrac = 0.65;
 
-			const cell = Math.max(2.1, Math.min(gw / (dim + gaps * gapFrac), gh / (dim + gaps * gapFrac)));
+			// Choose cell size primarily from height (so spacing is stable). We intentionally
+			// allow the field to extend beyond the side width — it gets clipped by overflow,
+			// which sells the “infinite canvas” feeling and avoids empty bands near the axis.
+			const cell = Math.max(2.2, gh / (dim + gaps * gapFrac));
 			const gapPx = cell * gapFrac;
-			const s = Math.max(1.6, cell * 0.82);
+			const s = Math.max(1.6, cell * 0.84);
 
-			const fieldW = dim * cell + gaps * gapPx;
 			const fieldH = dim * cell + gaps * gapPx;
-
-			const ox = gx + Math.max(0, (gw - fieldW) / 2);
 			const oy = gy + Math.max(0, (gh - fieldH) / 2);
+
+			// Small padding so particles don't overlap the 0-line / badge.
+			const padAxis = Math.max(8, marginX);
 
 			for (let row = 0; row < dim; row++) {
 				for (let colFill = 0; colFill < dim; colFill++) {
-					// Ensure the fill order starts near the 0-axis for both sides.
-					const colIndex = side === "left" ? dim - 1 - colFill : colFill;
-					const colGap = Math.floor(colIndex / chunk);
+					const colGap = Math.floor(colFill / chunk);
 					const rowGap = Math.floor(row / chunk);
-					const xDom = ox + (colIndex + 0.5) * cell + colGap * gapPx;
+					const dx = padAxis + (colFill + 0.5) * cell + colGap * gapPx;
+					const xDom = side === "left" ? midX - dx : midX + dx;
 					const yDom = oy + (row + 0.5) * cell + rowGap * gapPx;
-					const atChunkEdge = colIndex % chunk === 0 || row % chunk === 0;
+
+					const atChunkEdge = colFill % chunk === 0 || row % chunk === 0;
 					const s2 = atChunkEdge ? s * 0.74 : s;
 
-					// Store local coords relative to center, in y-up space.
 					const yUp = this.height - yDom;
+					// Local coords relative to canvas center, y-up.
 					into.push({ x: xDom - midX, y: yUp - this.height * 0.5, s: s2 });
 					if (into.length >= 10000) return;
 				}
 			}
 		};
 
-		buildField(0, midX, this.negBases, "left");
-		buildField(midX, this.width, this.posBases, "right");
+		buildFieldFromAxis(this.negBases, "left");
+		buildFieldFromAxis(this.posBases, "right");
 
 		// Bake static matrices to both fields. Active meshes reuse these unless a ripple is animating.
 		const tmp = new THREE.Object3D();
