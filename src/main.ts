@@ -428,19 +428,18 @@ function renderValueFollower(
 			? { bg: "rgba(251,207,232,0.88)", border: "rgba(219,39,119,0.55)", text: "rgb(136, 19, 55)" }
 			: { bg: "rgba(221,214,254,0.86)", border: "rgba(109,40,217,0.50)", text: "rgb(76, 29, 149)" };
 
-	el.style.background = color.bg;
-	el.style.border = `1px solid ${color.border}`;
+	// Avoid any “veil” over particles: no blurred or translucent pill background.
+	el.style.background = "transparent";
+	el.style.border = "none";
 	el.style.color = color.text;
-	el.style.padding = subtle ? "6px 10px" : "7px 12px";
-	el.style.borderRadius = "999px";
+	el.style.padding = subtle ? "6px 8px" : "7px 10px";
+	el.style.borderRadius = "12px";
 	el.style.fontSize = subtle ? "12px" : "13px";
 	el.style.fontWeight = subtle ? "600" : "700";
 	el.style.letterSpacing = "-0.01em";
-	el.style.backdropFilter = "blur(10px)";
-	el.style.boxShadow = subtle
-		? "0 1px 1px rgba(15,23,42,0.06), 0 6px 18px rgba(236,72,153,0.06)"
-		: "0 1px 1px rgba(15,23,42,0.06), 0 10px 24px rgba(236,72,153,0.10)";
-	el.style.opacity = subtle ? "0.82" : "0.95";
+	el.style.textShadow =
+		"0 1px 0 rgba(255,255,255,0.95), 0 0 10px rgba(255,255,255,0.75), 0 6px 18px rgba(15,23,42,0.08)";
+	el.style.opacity = subtle ? "0.9" : "1";
 	el.textContent = label;
 	return el;
 }
