@@ -55,6 +55,7 @@ class Canvas2DImpl {
 	private valueA = 0;
 	private valueB = 0;
 	private dirty = true;
+	private points: Array<{ x: number; y: number; seed: number }> = [];
 
 	constructor(private host: HTMLElement, private beforeEl?: Element) {
 		this.canvas = makeCanvas();
@@ -122,7 +123,22 @@ class Canvas2DImpl {
 	}
 
 	private rebuildParticles() {
-		// no-op (fallback renderer uses analytical dot grid)
+		const bottomPad = 80;
+		const topPad = 14;
+		const areaTop = topPad;
+		const areaHeight = Math.max(60, this.height - bottomPad - topPad);
+		const area = this.width * areaHeight;
+		const count = clampInt(Math.round(area / 18000), 800, 2600);
+
+		const rand = mulberry32(hash32(`${this.width}x${this.height}`));
+		this.points = [];
+		for (let i = 0; i < count; i++) {
+			this.points.push({
+				x: rand() * this.width,
+				y: areaTop + rand() * areaHeight,
+				seed: rand(),
+			});
+		}
 	}
 
 	private draw(time: number) {
@@ -133,138 +149,64 @@ class Canvas2DImpl {
 		const areaTop = topPad;
 		const areaHeight = Math.max(60, this.height - bottomPad - topPad);
 
-		// 100x100循环：每 4 个 k 完成一次 10000 容量的点阵填满
+		// 100x100循环：每 4 个 k 完成一次 10000 容量的点阵填满（这里只用于“粒子密度”）
 		const level = this.k === 0 ? 0 : Math.floor((this.k - 1) / 4);
-		const base = Math.pow(10, 4 * level); // 每个点代表的数值
-		const maxDots = Math.pow(10, this.k - 4 * level); // 1/10/100/1000/10000
+		const base = Math.pow(10, 4 * level);
+		const maxDots = Math.pow(10, this.k - 4 * level);
 
-		const grid = dotGridDims(maxDots);
-		const drawRegion = (ballX: number, rawValue: number, side: "neg" | "pos") => {
-			const start = Math.min(this.midX, ballX);
-			const end = Math.max(this.midX, ballX);
-			const regionW = Math.max(0, end - start);
-			if (regionW < 24) return;
-
-			const marginX = 14;
-			const marginY = 10;
-			const gx = start + marginX;
-			const gy = areaTop + marginY;
-			const gw = Math.max(1, regionW - marginX * 2);
-			const gh = Math.max(1, areaHeight - marginY * 2);
-
-			const cellW = gw / grid.cols;
-			const cellH = gh / grid.rows;
-			const dotR = clamp(Math.min(cellW, cellH) * 0.28, 1.3, 5.5);
-
+		const ratioFor = (rawValue: number) => {
 			const absValue = Math.abs(Math.round(rawValue));
 			const filled = clampInt(Math.floor(absValue / base), 0, maxDots);
-
-			// aesthetic: faint empty dots + stronger filled dots
-			const emptyAlpha = 0.12;
-			const filledAlphaBase = 0.38; // <=0.5
-			const filledAlphaWave = 0.12; // <=0.5 total
-
-			const rgb = side === "pos" ? POS_RGB : NEG_RGB;
-			const emptyColor = `rgba(${rgb.r},${rgb.g},${rgb.b},${emptyAlpha})`;
-			const filledColor = (a: number) => `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
-
-			// draw group boundaries (10x10) only when grid is "big"
-			if (grid.cols >= 100 || grid.rows >= 100) {
-				ctx.save();
-				ctx.strokeStyle = "rgba(15,23,42,0.06)";
-				ctx.lineWidth = 1;
-				for (let c = 10; c < grid.cols; c += 10) {
-					const x = gx + c * cellW;
-					ctx.beginPath();
-					ctx.moveTo(x, gy);
-					ctx.lineTo(x, gy + gh);
-					ctx.stroke();
-				}
-				for (let r = 10; r < grid.rows; r += 10) {
-					const y = gy + r * cellH;
-					ctx.beginPath();
-					ctx.moveTo(gx, y);
-					ctx.lineTo(gx + gw, y);
-					ctx.stroke();
-				}
-				ctx.restore();
-			}
-
-			// ripple rings (visible but alpha <= 0.5), clipped to region
-			if (this.ripples.length) {
-				ctx.save();
-				ctx.beginPath();
-				ctx.rect(gx, gy, gw, gh);
-				ctx.clip();
-				for (const r of this.ripples) {
-					const dt = time - r.start;
-					if (dt < 0) continue;
-					const radius = dt * 140;
-					if (radius > Math.max(this.width, this.height) * 1.4) continue;
-					const fade = Math.exp(-dt * 1.1);
-					const a = clamp(0.28 * fade, 0, 0.5);
-					if (a <= 0.01) continue;
-					ctx.strokeStyle = filledColor(a);
-					ctx.lineWidth = 2;
-					ctx.beginPath();
-					ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
-					ctx.stroke();
-				}
-				ctx.restore();
-			}
-
-			// empty dots (fast path)
-			ctx.fillStyle = emptyColor;
-			for (let i = 0; i < grid.capacity; i++) {
-				const col = i % grid.cols;
-				const row = Math.floor(i / grid.cols);
-				if (row >= grid.rows) break;
-				const px = gx + (col + 0.5) * cellW;
-				const py = gy + (row + 0.5) * cellH;
-				ctx.beginPath();
-				ctx.arc(px, py, dotR, 0, Math.PI * 2);
-				ctx.fill();
-			}
-
-			// filled dots with ripple highlight + gentle displacement
-			for (let i = 0; i < filled; i++) {
-				const col = i % grid.cols;
-				const row = Math.floor(i / grid.cols);
-				const px = gx + (col + 0.5) * cellW;
-				const py0 = gy + (row + 0.5) * cellH;
-
-				let wave = 0;
-				for (const r of this.ripples) {
-					const dt = time - r.start;
-					if (dt < 0) continue;
-					const dx = px - r.x;
-					const dy = py0 - r.y;
-					const d = Math.hypot(dx, dy);
-					const w = Math.sin(d * 0.075 - dt * 5.2);
-					const env = Math.exp(-dt * 0.95) * Math.exp(-d * 0.012);
-					wave += w * env;
-				}
-
-				const a = clamp(filledAlphaBase + clamp(Math.abs(wave), 0, 1) * filledAlphaWave, 0, 0.5);
-				ctx.fillStyle = filledColor(a);
-				const py = py0 + wave * 8.0;
-				const rr = dotR + clamp(wave, 0, 1) * 1.4;
-				ctx.beginPath();
-				ctx.arc(px, py, rr, 0, Math.PI * 2);
-				ctx.fill();
-			}
-
-			// label hint (small, subtle): what each dot means in this level
-			ctx.save();
-			ctx.fillStyle = "rgba(15,23,42,0.36)";
-			ctx.font = "12px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial";
-			const label = base === 1 ? "1/点" : `${formatPower(base)}/点`;
-			ctx.fillText(label, gx + 2, gy + gh + 16);
-			ctx.restore();
+			return maxDots <= 0 ? 0 : filled / maxDots;
 		};
 
-		drawRegion(this.ballAx, this.valueA, this.valueA >= 0 ? "pos" : "neg");
-		drawRegion(this.ballBx, this.valueB, this.valueB >= 0 ? "pos" : "neg");
+		const regionFor = (ballX: number) => {
+			const start = Math.min(this.midX, ballX);
+			const end = Math.max(this.midX, ballX);
+			return { start, end, w: Math.max(0, end - start) };
+		};
+
+		const rA = regionFor(this.ballAx);
+		const rB = regionFor(this.ballBx);
+		const ratioA = ratioFor(this.valueA);
+		const ratioB = ratioFor(this.valueB);
+
+		const colorFor = (side: "neg" | "pos", a: number) => {
+			const rgb = side === "pos" ? POS_RGB : NEG_RGB;
+			return `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
+		};
+
+		for (const p of this.points) {
+			const inA = rA.w >= 24 && p.x >= rA.start && p.x <= rA.end;
+			const inB = rB.w >= 24 && p.x >= rB.start && p.x <= rB.end;
+			if (!inA && !inB) continue;
+
+			const useB = inB && (!inA || Math.abs(p.x - this.ballBx) < Math.abs(p.x - this.ballAx));
+			const ratio = useB ? ratioB : ratioA;
+			if (p.seed > ratio) continue; // no empty-dot wallpaper
+
+			const side = (useB ? this.valueB : this.valueA) >= 0 ? "pos" : "neg";
+
+			let wave = 0;
+			for (const r of this.ripples) {
+				const dt = time - r.start;
+				if (dt < 0) continue;
+				const dx = p.x - r.x;
+				const dy = p.y - r.y;
+				const d = Math.hypot(dx, dy);
+				const w = Math.sin(d * 0.070 - dt * 6.2);
+				const env = Math.exp(-dt * 0.9) * Math.exp(-d * 0.012);
+				wave += w * env;
+			}
+
+			const a = clamp(0.22 + clamp(Math.abs(wave), 0, 1) * 0.28, 0, 0.5);
+			ctx.fillStyle = colorFor(side, a);
+
+			const size = 1.8 + clamp(wave, 0, 1) * 2.4;
+			ctx.beginPath();
+			ctx.arc(p.x, p.y + wave * 8.0, size, 0, Math.PI * 2);
+			ctx.fill();
+		}
 	}
 }
 
@@ -411,7 +353,6 @@ class WebGLPointsImpl {
 		const level = this.k === 0 ? 0 : Math.floor((this.k - 1) / 4);
 		const base = Math.pow(10, 4 * level);
 		const maxDots = Math.pow(10, this.k - 4 * level);
-		const grid = dotGridDims(maxDots);
 
 		const regionFor = (ballX: number) => {
 			const start = Math.min(this.midX, ballX);
@@ -421,50 +362,39 @@ class WebGLPointsImpl {
 		const rA = regionFor(this.ballAx);
 		const rB = regionFor(this.ballBx);
 
-		const signA = Math.sign(this.valueA) >= 0 ? "pos" : "neg";
-		const signB = Math.sign(this.valueB) >= 0 ? "pos" : "neg";
-		const rgbA = signA === "pos" ? POS_RGB : NEG_RGB;
-		const rgbB = signB === "pos" ? POS_RGB : NEG_RGB;
-
-		const filledA = clampInt(Math.floor(Math.abs(Math.round(this.valueA)) / base), 0, maxDots);
-		const filledB = clampInt(Math.floor(Math.abs(Math.round(this.valueB)) / base), 0, maxDots);
-
-		const marginX = 14;
-		const marginY = 10;
-
-		const gridEval = (x: number, y: number, region: { start: number; w: number }, filled: number) => {
-			if (region.w < 24) return { m: 0, idx: 0, inGrid: false };
-			const gx = region.start + marginX;
-			const gy = areaTop + marginY;
-			const gw = Math.max(1, region.w - marginX * 2);
-			const gh = Math.max(1, areaHeight - marginY * 2);
-			if (x < gx || x > gx + gw || y < gy || y > gy + gh) return { m: 0, idx: 0, inGrid: false };
-
-			const u = (x - gx) / gw;
-			const v = (y - gy) / gh;
-			const col = clampInt(Math.floor(u * grid.cols), 0, grid.cols - 1);
-			const row = clampInt(Math.floor(v * grid.rows), 0, grid.rows - 1);
-			const idx = row * grid.cols + col;
-			const inGrid = idx < grid.capacity;
-			const m = inGrid ? (idx < filled ? 1 : 0.25) : 0;
-			return { m, idx, inGrid };
+		const ratioFor = (rawValue: number) => {
+			const absValue = Math.abs(Math.round(rawValue));
+			const filled = clampInt(Math.floor(absValue / base), 0, maxDots);
+			return maxDots <= 0 ? 0 : filled / maxDots;
 		};
+		const ratioA = ratioFor(this.valueA);
+		const ratioB = ratioFor(this.valueB);
 
 		for (let i = 0; i < this.basePositions.length; i += 3) {
 			const x0 = this.basePositions[i];
 			const y0 = this.basePositions[i + 1];
 
-			// evaluate membership for either region
-			const ga = gridEval(x0, y0, rA, filledA);
-			const gb = gridEval(x0, y0, rB, filledB);
+			const inA = rA.w >= 24 && x0 >= rA.start && x0 <= rA.end && y0 >= areaTop && y0 <= areaTop + areaHeight;
+			const inB = rB.w >= 24 && x0 >= rB.start && x0 <= rB.end && y0 >= areaTop && y0 <= areaTop + areaHeight;
+			if (!inA && !inB) {
+				this.colors[i] = 0;
+				this.colors[i + 1] = 0;
+				this.colors[i + 2] = 0;
+				continue;
+			}
 
-			const useB = gb.m > ga.m;
-			const m = useB ? gb.m : ga.m;
-			const rgb = useB ? rgbB : rgbA;
+			const useB = inB && (!inA || Math.abs(x0 - this.ballBx) < Math.abs(x0 - this.ballAx));
+			const ratio = useB ? ratioB : ratioA;
+			const seed = this.seeds[i / 3] || 0.5;
+			if (seed > ratio) {
+				// no "empty dot wallpaper"
+				this.colors[i] = 0;
+				this.colors[i + 1] = 0;
+				this.colors[i + 2] = 0;
+				continue;
+			}
 
-			// always keep a faint center band (so user never thinks it's "gone")
-			const band = Math.exp(-Math.abs(x0 - this.midX) / 220) * 0.16;
-			const mm = Math.max(m, band);
+			const rgb = (useB ? this.valueB : this.valueA) >= 0 ? POS_RGB : NEG_RGB;
 
 			let wave = 0;
 			for (let r = 0; r < this.ripples.length; r++) {
@@ -480,7 +410,7 @@ class WebGLPointsImpl {
 			}
 
 			// subtle drift so it reads as "particles", not a flat wallpaper
-			const seed = this.seeds[i / 3] || 0.5;
+			// subtle drift so it reads as "particles", not a flat wallpaper
 			const drift = Math.sin(time * 0.9 + seed * 9.0) * 0.9;
 			const jitter = (seed - 0.5) * 0.9;
 
@@ -488,7 +418,7 @@ class WebGLPointsImpl {
 			this.positions[i + 1] = y0 + wave * 7.5 + drift * 0.6;
 			this.positions[i + 2] = 0;
 
-			const intensity = clamp(mm * (0.72 + clamp(Math.abs(wave), 0, 1) * 0.55), 0, 1);
+			const intensity = clamp(0.70 + clamp(Math.abs(wave), 0, 1) * 0.55, 0, 1);
 			this.colors[i] = clamp((rgb.r / 255) * intensity, 0, 1);
 			this.colors[i + 1] = clamp((rgb.g / 255) * intensity, 0, 1);
 			this.colors[i + 2] = clamp((rgb.b / 255) * intensity, 0, 1);
@@ -500,36 +430,33 @@ class WebGLPointsImpl {
 	}
 
 	private rebuildParticles() {
-		const area = this.width * this.height;
-		const desired = 3800;
-		const spacing = clampInt(Math.round(Math.sqrt(area / desired)), 9, 18);
-		const xs = Math.max(1, Math.floor(this.width / spacing));
-		const ys = Math.max(1, Math.floor(this.height / spacing));
-		const count = xs * ys;
+		const bottomPad = 80;
+		const topPad = 14;
+		const areaTop = topPad;
+		const areaHeight = Math.max(60, this.height - bottomPad - topPad);
+		const area = this.width * areaHeight;
+		const count = clampInt(Math.round(area / 16000), 1400, 5200);
 
 		this.basePositions = new Float32Array(count * 3);
 		this.positions = new Float32Array(count * 3);
 		this.colors = new Float32Array(count * 3);
 		this.seeds = new Float32Array(count);
 
-		let i = 0;
-		let s = 0;
-		for (let y = 0; y < ys; y++) {
-			for (let x = 0; x < xs; x++) {
-				const px = x * spacing + spacing * 0.5;
-				const py = y * spacing + spacing * 0.5;
-				this.basePositions[i] = px;
-				this.basePositions[i + 1] = py;
-				this.basePositions[i + 2] = 0;
-				this.positions[i] = px;
-				this.positions[i + 1] = py;
-				this.positions[i + 2] = 0;
-				this.colors[i] = 0;
-				this.colors[i + 1] = 0;
-				this.colors[i + 2] = 0;
-				this.seeds[s++] = ((x * 928371 + y * 1237) % 997) / 997;
-				i += 3;
-			}
+		const rand = mulberry32(hash32(`${this.width}x${this.height}`));
+		for (let p = 0; p < count; p++) {
+			const px = rand() * this.width;
+			const py = areaTop + rand() * areaHeight;
+			const i = p * 3;
+			this.basePositions[i] = px;
+			this.basePositions[i + 1] = py;
+			this.basePositions[i + 2] = 0;
+			this.positions[i] = px;
+			this.positions[i + 1] = py;
+			this.positions[i + 2] = 0;
+			this.colors[i] = 0;
+			this.colors[i + 1] = 0;
+			this.colors[i + 2] = 0;
+			this.seeds[p] = rand();
 		}
 
 		const geom = new THREE.BufferGeometry();
@@ -587,4 +514,23 @@ function formatPower(n: number) {
 	const k = Math.round(Math.log10(n));
 	if (Number.isFinite(k) && Math.pow(10, k) === n) return `10^${k}`;
 	return String(n);
+}
+
+function mulberry32(seed: number) {
+	let t = seed >>> 0;
+	return function () {
+		t += 0x6d2b79f5;
+		let x = Math.imul(t ^ (t >>> 15), 1 | t);
+		x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
+		return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+function hash32(s: string) {
+	let h = 2166136261;
+	for (let i = 0; i < s.length; i++) {
+		h ^= s.charCodeAt(i);
+		h = Math.imul(h, 16777619);
+	}
+	return h >>> 0;
 }
