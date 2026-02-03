@@ -40,6 +40,7 @@ const segIndependent = mustGetEl("#seg-independent") as HTMLButtonElement;
 let engine: LadderEngine | null = null;
 const layers = ensureAxisLayers(axis);
 const particles = new ParticleBlocks(axis, layers.overlay);
+const lowEndIPad = detectLowEndIPad();
 
 const state: State = {
 	k: 0,
@@ -65,6 +66,20 @@ type Transition = {
 };
 
 let transition: Transition | null = null;
+let renderScheduled = false;
+let renderNeeded = false;
+
+function requestRender() {
+	renderNeeded = true;
+	if (renderScheduled) return;
+	renderScheduled = true;
+	requestAnimationFrame(() => {
+		renderScheduled = false;
+		if (!renderNeeded) return;
+		renderNeeded = false;
+		render();
+	});
+}
 
 const stepper = new DiscreteStepper(state.k, (nextK) => {
 	const rect = axis.getBoundingClientRect();
@@ -190,7 +205,7 @@ function render() {
 	layers.overlay.appendChild(renderBall(xB, "b", labelsOpacity.from, labelsOpacity.to));
 
 	// continue animation frames if needed
-	if (transition) requestAnimationFrame(render);
+	if (transition) requestRender();
 }
 
 function formatRangeLabel(k: number): string {
@@ -468,7 +483,7 @@ btnZoomOut.addEventListener("click", () => bumpK(-1));
 btnResetZero.addEventListener("click", () => {
 	state.valueA = 0;
 	state.valueB = 0;
-	render();
+	requestRender();
 });
 
 toggleStepMode.addEventListener("change", () => {
@@ -478,7 +493,7 @@ toggleStepMode.addEventListener("change", () => {
 
 toggleFullNumber.addEventListener("change", () => {
 	state.fullNumber = toggleFullNumber.checked;
-	render();
+	requestRender();
 });
 
 inputTargetK.addEventListener("change", () => {
@@ -502,7 +517,7 @@ function setSymmetricMode(on: boolean) {
 	segSymmetric.classList.toggle("nl-seg-btn-active", on);
 	segIndependent.classList.toggle("nl-seg-btn-active", !on);
 	if (on) state.valueB = -state.valueA;
-	render();
+	requestRender();
 }
 
 segSymmetric.addEventListener("click", () => setSymmetricMode(true));
@@ -537,7 +552,7 @@ function applyValueAtClientPoint(clientX: number, clientY: number) {
 	lastRippleX = x;
 	lastRippleY = clamp(clientY - rect.top, 0, rect.height);
 	particles.addRipple(lastRippleX, lastRippleY);
-	render();
+	requestRender();
 }
 
 axis.addEventListener("pointerdown", (e) => {
@@ -584,13 +599,15 @@ axis.addEventListener("pointermove", (e) => {
 	const now = performance.now();
 	const dt = now - lastRippleAt;
 	const dist = Math.hypot(x - lastRippleX, y - lastRippleY);
-	if (dt >= 80 && dist >= 18) {
+	const rippleDt = lowEndIPad ? 140 : 80;
+	const rippleDist = lowEndIPad ? 32 : 18;
+	if (dt >= rippleDt && dist >= rippleDist) {
 		lastRippleAt = now;
 		lastRippleX = x;
 		lastRippleY = y;
 		particles.addRipple(x, y);
 	}
-	render();
+	requestRender();
 });
 
 axis.addEventListener("pointerup", (e) => {
@@ -675,7 +692,7 @@ axis.addEventListener(
 				lastRippleY = y;
 				particles.addRipple(x, y);
 			} else
-			if (dt >= 80 && dist >= 18) {
+			if (dt >= (lowEndIPad ? 140 : 80) && dist >= (lowEndIPad ? 32 : 18)) {
 				lastRippleAt = now;
 				lastRippleX = x;
 				lastRippleY = y;
@@ -683,7 +700,7 @@ axis.addEventListener(
 			}
 			lastTouchX = t.clientX;
 			lastTouchY = t.clientY;
-			render();
+			requestRender();
 			return;
 		}
 		if (e.touches.length !== 2) return;
@@ -809,10 +826,18 @@ function zoomPulse(t: number) {
 }
 
 // Initial render + resize handling
-const ro = new ResizeObserver(() => render());
+const ro = new ResizeObserver(() => requestRender());
 ro.observe(axis);
 
 const roParticles = new ResizeObserver(() => particles.resize());
 roParticles.observe(axis);
 
-render();
+requestRender();
+
+function detectLowEndIPad() {
+	const ua = (navigator.userAgent || "").toLowerCase();
+	const isIPad = ua.includes("ipad") || (ua.includes("macintosh") && "ontouchend" in document);
+	if (!isIPad) return false;
+	const cores = (navigator as any).hardwareConcurrency || 4;
+	return cores <= 2;
+}
