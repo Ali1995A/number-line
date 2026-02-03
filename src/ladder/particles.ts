@@ -4,8 +4,9 @@ type Ripple = { x: number; y: number; start: number };
 type MaskParams = { width: number; height: number; midX: number; ballAx: number; ballBx: number };
 type MaskParamsV2 = MaskParams & { k: number; valueA: number; valueB: number };
 
-const NEG_RGB = { r: 125, g: 211, b: 252 }; // light blue (sky-300)
-const POS_RGB = { r: 244, g: 114, b: 182 }; // light pink (pink-400)
+// Color spec: negative = light blue, positive = light pink
+const NEG_RGB = { r: 125, g: 211, b: 252 }; // sky-300
+const POS_RGB = { r: 244, g: 114, b: 182 }; // pink-400
 
 export class ParticleRipples {
 	private impl: WebGLPointsImpl | Canvas2DImpl;
@@ -53,7 +54,6 @@ class Canvas2DImpl {
 	private ballBx = 0.5;
 	private valueA = 0;
 	private valueB = 0;
-	private particles: Array<{ x: number; y: number; seed: number }> = [];
 	private dirty = true;
 
 	constructor(private host: HTMLElement, private beforeEl?: Element) {
@@ -122,8 +122,7 @@ class Canvas2DImpl {
 	}
 
 	private rebuildParticles() {
-		// no-op: particle positions are derived from the dot-matrix grid per ball region
-		this.particles = [];
+		// no-op (fallback renderer uses analytical dot grid)
 	}
 
 	private draw(time: number) {
@@ -191,7 +190,7 @@ class Canvas2DImpl {
 				ctx.restore();
 			}
 
-			// ripple rings (very visible but alpha <= 0.5), clipped to region
+			// ripple rings (visible but alpha <= 0.5), clipped to region
 			if (this.ripples.length) {
 				ctx.save();
 				ctx.beginPath();
@@ -200,7 +199,7 @@ class Canvas2DImpl {
 				for (const r of this.ripples) {
 					const dt = time - r.start;
 					if (dt < 0) continue;
-					const radius = dt * 110;
+					const radius = dt * 140;
 					if (radius > Math.max(this.width, this.height) * 1.4) continue;
 					const fade = Math.exp(-dt * 1.1);
 					const a = clamp(0.28 * fade, 0, 0.5);
@@ -241,14 +240,14 @@ class Canvas2DImpl {
 					const dx = px - r.x;
 					const dy = py0 - r.y;
 					const d = Math.hypot(dx, dy);
-					const w = Math.sin(d * 0.075 - dt * 5.4);
-					const env = Math.exp(-dt * 0.95) * Math.exp(-d * 0.013);
+					const w = Math.sin(d * 0.075 - dt * 5.2);
+					const env = Math.exp(-dt * 0.95) * Math.exp(-d * 0.012);
 					wave += w * env;
 				}
 
 				const a = clamp(filledAlphaBase + clamp(Math.abs(wave), 0, 1) * filledAlphaWave, 0, 0.5);
 				ctx.fillStyle = filledColor(a);
-				const py = py0 + wave * 6.0;
+				const py = py0 + wave * 8.0;
 				const rr = dotR + clamp(wave, 0, 1) * 1.4;
 				ctx.beginPath();
 				ctx.arc(px, py, rr, 0, Math.PI * 2);
@@ -303,9 +302,12 @@ class WebGLPointsImpl {
 	private destroyed = false;
 	private width = 1;
 	private height = 1;
+	private k = 0;
 	private midX = 0.5;
 	private ballAx = 0.5;
 	private ballBx = 0.5;
+	private valueA = 0;
+	private valueB = 0;
 
 	private basePositions: Float32Array = new Float32Array(0);
 	private positions: Float32Array = new Float32Array(0);
@@ -330,7 +332,7 @@ class WebGLPointsImpl {
 			size: 10,
 			map,
 			transparent: true,
-			opacity: 0.5, // <= 0.5
+			opacity: 0.5, // <= 0.5 (global cap)
 			vertexColors: true,
 			blending: THREE.AdditiveBlending,
 			depthTest: false,
@@ -350,9 +352,12 @@ class WebGLPointsImpl {
 	}
 
 	setMask(params: MaskParamsV2) {
+		this.k = params.k;
 		this.midX = params.midX;
 		this.ballAx = params.ballAx;
 		this.ballBx = params.ballBx;
+		this.valueA = params.valueA;
+		this.valueB = params.valueB;
 	}
 
 	addRipple(x: number, y: number) {
@@ -398,52 +403,95 @@ class WebGLPointsImpl {
 	}
 
 	private tick(time: number) {
-		const edge = 14;
-		const intervalMask = (x: number, a: number, b: number) => {
-			const lo = Math.min(a, b);
-			const hi = Math.max(a, b);
-			const m1 = smoothstep(lo, lo + edge, x);
-			const m2 = 1 - smoothstep(hi - edge, hi, x);
-			return m1 * m2;
+		const bottomPad = 80;
+		const topPad = 14;
+		const areaTop = topPad;
+		const areaHeight = Math.max(60, this.height - bottomPad - topPad);
+
+		const level = this.k === 0 ? 0 : Math.floor((this.k - 1) / 4);
+		const base = Math.pow(10, 4 * level);
+		const maxDots = Math.pow(10, this.k - 4 * level);
+		const grid = dotGridDims(maxDots);
+
+		const regionFor = (ballX: number) => {
+			const start = Math.min(this.midX, ballX);
+			const end = Math.max(this.midX, ballX);
+			return { start, end, w: Math.max(0, end - start) };
+		};
+		const rA = regionFor(this.ballAx);
+		const rB = regionFor(this.ballBx);
+
+		const signA = Math.sign(this.valueA) >= 0 ? "pos" : "neg";
+		const signB = Math.sign(this.valueB) >= 0 ? "pos" : "neg";
+		const rgbA = signA === "pos" ? POS_RGB : NEG_RGB;
+		const rgbB = signB === "pos" ? POS_RGB : NEG_RGB;
+
+		const filledA = clampInt(Math.floor(Math.abs(Math.round(this.valueA)) / base), 0, maxDots);
+		const filledB = clampInt(Math.floor(Math.abs(Math.round(this.valueB)) / base), 0, maxDots);
+
+		const marginX = 14;
+		const marginY = 10;
+
+		const gridEval = (x: number, y: number, region: { start: number; w: number }, filled: number) => {
+			if (region.w < 24) return { m: 0, idx: 0, inGrid: false };
+			const gx = region.start + marginX;
+			const gy = areaTop + marginY;
+			const gw = Math.max(1, region.w - marginX * 2);
+			const gh = Math.max(1, areaHeight - marginY * 2);
+			if (x < gx || x > gx + gw || y < gy || y > gy + gh) return { m: 0, idx: 0, inGrid: false };
+
+			const u = (x - gx) / gw;
+			const v = (y - gy) / gh;
+			const col = clampInt(Math.floor(u * grid.cols), 0, grid.cols - 1);
+			const row = clampInt(Math.floor(v * grid.rows), 0, grid.rows - 1);
+			const idx = row * grid.cols + col;
+			const inGrid = idx < grid.capacity;
+			const m = inGrid ? (idx < filled ? 1 : 0.25) : 0;
+			return { m, idx, inGrid };
 		};
 
-		const moved = Math.abs(this.ballAx - this.midX) + Math.abs(this.ballBx - this.midX);
-
-		const cool = { r: NEG_RGB.r / 255, g: NEG_RGB.g / 255, b: NEG_RGB.b / 255 };
-		const warm = { r: POS_RGB.r / 255, g: POS_RGB.g / 255, b: POS_RGB.b / 255 };
-
 		for (let i = 0; i < this.basePositions.length; i += 3) {
-			const x = this.basePositions[i];
+			const x0 = this.basePositions[i];
 			const y0 = this.basePositions[i + 1];
 
-			const mask = Math.max(intervalMask(x, this.midX, this.ballAx), intervalMask(x, this.midX, this.ballBx));
-			const band = Math.exp(-Math.abs(x - this.midX) / 200) * 0.32 * (1 - smoothstep(0, 10, moved));
-			const m = Math.max(mask, band);
+			// evaluate membership for either region
+			const ga = gridEval(x0, y0, rA, filledA);
+			const gb = gridEval(x0, y0, rB, filledB);
+
+			const useB = gb.m > ga.m;
+			const m = useB ? gb.m : ga.m;
+			const rgb = useB ? rgbB : rgbA;
+
+			// always keep a faint center band (so user never thinks it's "gone")
+			const band = Math.exp(-Math.abs(x0 - this.midX) / 220) * 0.16;
+			const mm = Math.max(m, band);
 
 			let wave = 0;
 			for (let r = 0; r < this.ripples.length; r++) {
 				const rr = this.ripples[r];
 				const dt = time - rr.start;
 				if (dt < 0) continue;
-				const dx = x - rr.x;
+				const dx = x0 - rr.x;
 				const dy = y0 - rr.y;
 				const d = Math.hypot(dx, dy);
-				const w = Math.sin(d * 0.10 - dt * 7.0);
-				const env = Math.exp(-dt * 1.35) * Math.exp(-d * 0.02);
+				const w = Math.sin(d * 0.075 - dt * 5.2);
+				const env = Math.exp(-dt * 0.95) * Math.exp(-d * 0.012);
 				wave += w * env;
 			}
 
-			const jitter = (this.seeds[i / 3] - 0.5) * 0.8;
-			this.positions[i] = x + jitter;
-			this.positions[i + 1] = y0 + wave * 3.5;
+			// subtle drift so it reads as "particles", not a flat wallpaper
+			const seed = this.seeds[i / 3] || 0.5;
+			const drift = Math.sin(time * 0.9 + seed * 9.0) * 0.9;
+			const jitter = (seed - 0.5) * 0.9;
+
+			this.positions[i] = x0 + jitter;
+			this.positions[i + 1] = y0 + wave * 7.5 + drift * 0.6;
 			this.positions[i + 2] = 0;
 
-			const side = x >= this.midX ? 1 : 0;
-			const base = side ? warm : cool;
-			const intensity = clamp(0.20 + m * 0.80, 0, 1) * (0.85 + clamp(Math.abs(wave), 0, 1) * 0.35);
-			this.colors[i] = clamp(base.r * intensity, 0, 1);
-			this.colors[i + 1] = clamp(base.g * intensity, 0, 1);
-			this.colors[i + 2] = clamp(base.b * intensity, 0, 1);
+			const intensity = clamp(mm * (0.72 + clamp(Math.abs(wave), 0, 1) * 0.55), 0, 1);
+			this.colors[i] = clamp((rgb.r / 255) * intensity, 0, 1);
+			this.colors[i + 1] = clamp((rgb.g / 255) * intensity, 0, 1);
+			this.colors[i + 2] = clamp((rgb.b / 255) * intensity, 0, 1);
 		}
 
 		const geom = this.points.geometry as THREE.BufferGeometry;
