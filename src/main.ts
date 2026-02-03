@@ -460,6 +460,9 @@ segIndependent.addEventListener("click", () => setSymmetricMode(false));
 let dragging = false;
 let pinching = false;
 let draggingBall: "a" | "b" | null = null;
+let lastRippleAt = 0;
+let lastRippleX = 0;
+let lastRippleY = 0;
 
 axis.addEventListener("pointerdown", (e) => {
 	if (pinching) return;
@@ -471,13 +474,17 @@ axis.addEventListener("pointerdown", (e) => {
 
 	// ripple at touch point + symmetric ripple
 	const rect = axis.getBoundingClientRect();
-	particles.addRipple(clamp(e.clientX - rect.left, 0, rect.width), clamp(e.clientY - rect.top, 0, rect.height));
+	lastRippleAt = performance.now();
+	lastRippleX = clamp(e.clientX - rect.left, 0, rect.width);
+	lastRippleY = clamp(e.clientY - rect.top, 0, rect.height);
+	particles.addRipple(lastRippleX, lastRippleY);
 });
 
 axis.addEventListener("pointermove", (e) => {
 	if (!dragging || !engine) return;
 	const rect = axis.getBoundingClientRect();
 	const x = clamp(e.clientX - rect.left, 0, rect.width);
+	const y = clamp(e.clientY - rect.top, 0, rect.height);
 	const value = engine.numberLine.valueAt(x);
 	if (draggingBall === "b") {
 		if (state.symmetric) state.valueA = clamp(-value, -engine.maxAbsValue, engine.maxAbsValue);
@@ -487,6 +494,17 @@ axis.addEventListener("pointermove", (e) => {
 		state.valueA = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
 	}
 	if (state.symmetric) state.valueB = -state.valueA;
+
+	// emit ripples while dragging (throttled)
+	const now = performance.now();
+	const dt = now - lastRippleAt;
+	const dist = Math.hypot(x - lastRippleX, y - lastRippleY);
+	if (dt >= 80 && dist >= 18) {
+		lastRippleAt = now;
+		lastRippleX = x;
+		lastRippleY = y;
+		particles.addRipple(x, y);
+	}
 	render();
 });
 
@@ -511,10 +529,10 @@ axis.addEventListener(
 			touchDragging = true;
 			touchDragId = e.touches[0].identifier;
 			const rect = axis.getBoundingClientRect();
-			particles.addRipple(
-				clamp(e.touches[0].clientX - rect.left, 0, rect.width),
-				clamp(e.touches[0].clientY - rect.top, 0, rect.height),
-			);
+			lastRippleAt = performance.now();
+			lastRippleX = clamp(e.touches[0].clientX - rect.left, 0, rect.width);
+			lastRippleY = clamp(e.touches[0].clientY - rect.top, 0, rect.height);
+			particles.addRipple(lastRippleX, lastRippleY);
 		} else if (e.touches.length === 2) {
 			pinching = true;
 			dragging = false;
@@ -535,6 +553,7 @@ axis.addEventListener(
 			e.preventDefault();
 			const rect = axis.getBoundingClientRect();
 			const x = clamp(t.clientX - rect.left, 0, rect.width);
+			const y = clamp(t.clientY - rect.top, 0, rect.height);
 			const value = engine.numberLine.valueAt(x);
 			// touch drag defaults to nearest ball
 			const chosen = draggingBall ?? pickNearestBall(t.clientX);
@@ -545,6 +564,17 @@ axis.addEventListener(
 				state.valueA = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
 			}
 			if (state.symmetric) state.valueB = -state.valueA;
+
+			// emit ripples while finger slides (throttled)
+			const now = performance.now();
+			const dt = now - lastRippleAt;
+			const dist = Math.hypot(x - lastRippleX, y - lastRippleY);
+			if (dt >= 80 && dist >= 18) {
+				lastRippleAt = now;
+				lastRippleX = x;
+				lastRippleY = y;
+				particles.addRipple(x, y);
+			}
 			render();
 			return;
 		}
