@@ -1,10 +1,12 @@
 import * as THREE from "three";
+import * as THREE from "three";
 
 // Rule: render only block particles within data region (no background dots).
 // Hierarchy (discrete k): always render a regular 100×100 grid, but each block represents a larger
 // integer "unit" as k grows. When k crosses +4 orders, one block effectively represents a whole
 // previous 100×100 grid (10^4). This creates the requested “100×100 → 1粒子 → 100×100…” loop.
 
+// Ripple coords are in pixel space with y-up (to match the orthographic camera space).
 type Ripple = { x: number; y: number; start: number };
 
 export type BlockParams = {
@@ -26,9 +28,12 @@ export class ParticleBlocks {
 	private renderer: THREE.WebGLRenderer;
 	private scene: THREE.Scene;
 	private camera: THREE.OrthographicCamera;
+	private root: THREE.Group;
 
-	private meshNeg: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-	private meshPos: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+	private meshNegBase: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+	private meshNegActive: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+	private meshPosBase: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+	private meshPosActive: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
 
 	private rafId: number | null = null;
 	private needsFrame = true;
@@ -51,6 +56,8 @@ export class ParticleBlocks {
 	// cached per-instance base transforms
 	private negBases: Array<{ x: number; y: number; s: number }> = [];
 	private posBases: Array<{ x: number; y: number; s: number }> = [];
+	private lastNegCount = 0;
+	private lastPosCount = 0;
 
 	constructor(private host: HTMLElement, private beforeEl?: Element) {
 		this.canvas = document.createElement("canvas");
@@ -77,13 +84,23 @@ export class ParticleBlocks {
 
 		this.scene = new THREE.Scene();
 		// Use a conventional pixel space: x=[0..w], y=[0..h] with y up.
-		// We'll store ripple/layout coordinates in DOM space (y down) and flip at render time.
+		// DOM input events use y-down; we convert in addRipple().
 		this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -10, 10);
 		this.camera.position.set(0, 0, 1);
 
+		this.root = new THREE.Group();
+		this.scene.add(this.root);
+
 		const geo = new THREE.PlaneGeometry(1, 1);
 		const alphaTex = makeRoundedAlphaTexture();
-		const matNeg = new THREE.MeshBasicMaterial({
+		const matNegBase = new THREE.MeshBasicMaterial({
+			color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
+			transparent: true,
+			opacity: 0.12, // faint inactive grid
+			depthTest: false,
+			depthWrite: false,
+		});
+		const matNegActive = new THREE.MeshBasicMaterial({
 			color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
 			transparent: true,
 			opacity: 0.5, // <= 0.5
@@ -91,11 +108,21 @@ export class ParticleBlocks {
 			depthWrite: false,
 		});
 		if (alphaTex) {
-			matNeg.alphaMap = alphaTex;
-			matNeg.alphaTest = 0.02;
-			matNeg.needsUpdate = true;
+			matNegBase.alphaMap = alphaTex;
+			matNegBase.alphaTest = 0.02;
+			matNegBase.needsUpdate = true;
+			matNegActive.alphaMap = alphaTex;
+			matNegActive.alphaTest = 0.02;
+			matNegActive.needsUpdate = true;
 		}
-		const matPos = new THREE.MeshBasicMaterial({
+		const matPosBase = new THREE.MeshBasicMaterial({
+			color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
+			transparent: true,
+			opacity: 0.12, // faint inactive grid
+			depthTest: false,
+			depthWrite: false,
+		});
+		const matPosActive = new THREE.MeshBasicMaterial({
 			color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
 			transparent: true,
 			opacity: 0.5, // <= 0.5
@@ -103,17 +130,26 @@ export class ParticleBlocks {
 			depthWrite: false,
 		});
 		if (alphaTex) {
-			matPos.alphaMap = alphaTex;
-			matPos.alphaTest = 0.02;
-			matPos.needsUpdate = true;
+			matPosBase.alphaMap = alphaTex;
+			matPosBase.alphaTest = 0.02;
+			matPosBase.needsUpdate = true;
+			matPosActive.alphaMap = alphaTex;
+			matPosActive.alphaTest = 0.02;
+			matPosActive.needsUpdate = true;
 		}
 
 		// capacity upper bound per side: 10k blocks is fine
-		this.meshNeg = new THREE.InstancedMesh(geo, matNeg, 10000);
-		this.meshPos = new THREE.InstancedMesh(geo, matPos, 10000);
-		this.meshNeg.frustumCulled = false;
-		this.meshPos.frustumCulled = false;
-		this.scene.add(this.meshNeg, this.meshPos);
+		this.meshNegBase = new THREE.InstancedMesh(geo, matNegBase, 10000);
+		this.meshNegActive = new THREE.InstancedMesh(geo, matNegActive, 10000);
+		this.meshPosBase = new THREE.InstancedMesh(geo, matPosBase, 10000);
+		this.meshPosActive = new THREE.InstancedMesh(geo, matPosActive, 10000);
+
+		for (const m of [this.meshNegBase, this.meshNegActive, this.meshPosBase, this.meshPosActive]) {
+			m.frustumCulled = false;
+		}
+
+		// Draw inactive first, then active on top.
+		this.root.add(this.meshNegBase, this.meshPosBase, this.meshNegActive, this.meshPosActive);
 
 		this.resize();
 		this.requestFrame();
@@ -144,7 +180,8 @@ export class ParticleBlocks {
 
 	addRipple(x: number, y: number) {
 		const now = performance.now() / 1000;
-		this.ripples.push({ x, y, start: now }, { x: this.width - x, y, start: now });
+		const yUp = this.height - y;
+		this.ripples.push({ x, y: yUp, start: now }, { x: this.width - x, y: yUp, start: now });
 		if (this.ripples.length > 16) this.ripples.splice(0, this.ripples.length - 16);
 		this.requestFrame();
 	}
@@ -167,10 +204,14 @@ export class ParticleBlocks {
 		this.destroyed = true;
 		if (this.rafId != null) cancelAnimationFrame(this.rafId);
 		this.rafId = null;
-		this.meshNeg.geometry.dispose();
-		this.meshPos.geometry.dispose();
-		this.meshNeg.material.dispose();
-		this.meshPos.material.dispose();
+		this.meshNegBase.geometry.dispose();
+		this.meshNegActive.geometry.dispose();
+		this.meshPosBase.geometry.dispose();
+		this.meshPosActive.geometry.dispose();
+		this.meshNegBase.material.dispose();
+		this.meshNegActive.material.dispose();
+		this.meshPosBase.material.dispose();
+		this.meshPosActive.material.dispose();
 		this.renderer.dispose();
 	}
 
@@ -199,8 +240,10 @@ export class ParticleBlocks {
 
 	private renderFrame(time: number) {
 		if (!this.params) {
-			this.meshNeg.count = 0;
-			this.meshPos.count = 0;
+			this.meshNegBase.count = 0;
+			this.meshPosBase.count = 0;
+			this.meshNegActive.count = 0;
+			this.meshPosActive.count = 0;
 			this.renderer.render(this.scene, this.camera);
 			return;
 		}
@@ -214,6 +257,35 @@ export class ParticleBlocks {
 		// Larger k -> slightly tighter (zoomed-out) particle field.
 		const scaleFor = (k: number) => Math.pow(10, -k * 0.035);
 		const fieldScale = scaleFor(kAnimated);
+
+		// Apply smooth zoom to the whole particle field around the center.
+		const midX = this.params.midX;
+		const midYUp = this.height * 0.5;
+		this.root.position.set(midX, midYUp, 0);
+		this.root.scale.set(fieldScale, fieldScale, 1);
+
+		// Value → active particle count. Each particle represents a power-of-10 unit.
+		// Max is 100×100 = 10k.
+		const unitPow = Math.max(0, this.params.k - 4);
+		const unitValue = Math.pow(10, unitPow);
+		const negValue = Math.min(this.params.valueA, this.params.valueB, 0);
+		const posValue = Math.max(this.params.valueA, this.params.valueB, 0);
+		const targetNegCount = clampInt(Math.floor(Math.abs(Math.trunc(negValue)) / unitValue), 0, 10000);
+		const targetPosCount = clampInt(Math.floor(Math.abs(Math.trunc(posValue)) / unitValue), 0, 10000);
+
+		// When no ripples, we only need to change mesh.count (matrices already baked).
+		const hasRipples = this.ripples.length > 0;
+		this.meshNegActive.count = targetNegCount;
+		this.meshPosActive.count = targetPosCount;
+		this.lastNegCount = targetNegCount;
+		this.lastPosCount = targetPosCount;
+
+		if (!hasRipples) {
+			this.renderer.render(this.scene, this.camera);
+			this.renderedOnce = true;
+			if (Math.abs(kAnimated - kTarget) > 1e-3) this.requestFrame();
+			return;
+		}
 
 		const waveAt = (x: number, y: number) => {
 			let wave = 0;
@@ -232,46 +304,29 @@ export class ParticleBlocks {
 		};
 
 		const tmp = new THREE.Object3D();
-		const midX = this.params.midX;
-		const leftMost = Math.min(midX, this.params.ballAx, this.params.ballBx);
-		const rightMost = Math.max(midX, this.params.ballAx, this.params.ballBx);
 
-		// Curtain reveal window: covered regions do NOT get ripple calculations.
-		const negMinX = clamp(leftMost, 0, midX);
-		const posMaxX = clamp(rightMost, midX, this.width);
-		const midY = this.height * 0.5;
-
-		let outNeg = 0;
-		for (let i = 0; i < this.negBases.length; i++) {
+		// Ripple animation: only update the active instances (count may be < 10k).
+		for (let i = 0; i < targetNegCount; i++) {
 			const b = this.negBases[i];
-			const xT = midX + (b.x - midX) * fieldScale;
-			if (xT < negMinX) continue;
-			const yT = midY + (b.y - midY) * fieldScale;
-			const w = waveAt(xT, yT);
-			const scale = b.s * (1 + clamp(w, -0.55, 0.75));
-			tmp.position.set(xT, this.height - yT, 0);
-			tmp.scale.set(scale * fieldScale, scale * fieldScale, 1);
+			const w = waveAt(midX + b.x * fieldScale, midYUp + b.y * fieldScale);
+			const s = b.s * (1 + clamp(w, -0.55, 0.75));
+			tmp.position.set(b.x, b.y, 0);
+			tmp.scale.set(s, s, 1);
 			tmp.updateMatrix();
-			this.meshNeg.setMatrixAt(outNeg++, tmp.matrix);
+			this.meshNegActive.setMatrixAt(i, tmp.matrix);
 		}
-		this.meshNeg.count = outNeg;
-		this.meshNeg.instanceMatrix.needsUpdate = true;
+		this.meshNegActive.instanceMatrix.needsUpdate = true;
 
-		let outPos = 0;
-		for (let i = 0; i < this.posBases.length; i++) {
+		for (let i = 0; i < targetPosCount; i++) {
 			const b = this.posBases[i];
-			const xT = midX + (b.x - midX) * fieldScale;
-			if (xT > posMaxX) continue;
-			const yT = midY + (b.y - midY) * fieldScale;
-			const w = waveAt(xT, yT);
-			const scale = b.s * (1 + clamp(w, -0.55, 0.75));
-			tmp.position.set(xT, this.height - yT, 0);
-			tmp.scale.set(scale * fieldScale, scale * fieldScale, 1);
+			const w = waveAt(midX + b.x * fieldScale, midYUp + b.y * fieldScale);
+			const s = b.s * (1 + clamp(w, -0.55, 0.75));
+			tmp.position.set(b.x, b.y, 0);
+			tmp.scale.set(s, s, 1);
 			tmp.updateMatrix();
-			this.meshPos.setMatrixAt(outPos++, tmp.matrix);
+			this.meshPosActive.setMatrixAt(i, tmp.matrix);
 		}
-		this.meshPos.count = outPos;
-		this.meshPos.instanceMatrix.needsUpdate = true;
+		this.meshPosActive.instanceMatrix.needsUpdate = true;
 
 		this.renderer.render(this.scene, this.camera);
 		this.renderedOnce = true;
@@ -299,7 +354,12 @@ export class ParticleBlocks {
 		const gy = regionTop + marginY;
 		const gh = Math.max(1, regionH - marginY * 2);
 
-		const buildField = (start: number, end: number, into: Array<{ x: number; y: number; s: number }>) => {
+		const buildField = (
+			start: number,
+			end: number,
+			into: Array<{ x: number; y: number; s: number }>,
+			side: "left" | "right",
+		) => {
 			const w = Math.max(0, end - start);
 			if (w < 24) return;
 
@@ -323,27 +383,51 @@ export class ParticleBlocks {
 			const oy = gy + Math.max(0, (gh - fieldH) / 2);
 
 			for (let row = 0; row < dim; row++) {
-				for (let col = 0; col < dim; col++) {
-					const colGap = Math.floor(col / chunk);
+				for (let colFill = 0; colFill < dim; colFill++) {
+					// Ensure the fill order starts near the 0-axis for both sides.
+					const colIndex = side === "left" ? dim - 1 - colFill : colFill;
+					const colGap = Math.floor(colIndex / chunk);
 					const rowGap = Math.floor(row / chunk);
-					const x = ox + (col + 0.5) * cell + colGap * gapPx;
-					const y = oy + (row + 0.5) * cell + rowGap * gapPx;
-					const atChunkEdge = col % chunk === 0 || row % chunk === 0;
+					const xDom = ox + (colIndex + 0.5) * cell + colGap * gapPx;
+					const yDom = oy + (row + 0.5) * cell + rowGap * gapPx;
+					const atChunkEdge = colIndex % chunk === 0 || row % chunk === 0;
 					const s2 = atChunkEdge ? s * 0.74 : s;
-					into.push({ x, y, s: s2 });
+
+					// Store local coords relative to center, in y-up space.
+					const yUp = this.height - yDom;
+					into.push({ x: xDom - midX, y: yUp - this.height * 0.5, s: s2 });
 					if (into.length >= 10000) return;
 				}
 			}
 		};
 
-		buildField(0, midX, this.negBases);
-		buildField(midX, this.width, this.posBases);
+		buildField(0, midX, this.negBases, "left");
+		buildField(midX, this.width, this.posBases, "right");
 
-		// Count is determined each frame by the curtain reveal window.
-		if (!this.renderedOnce) {
-			this.meshNeg.count = Math.min(this.negBases.length, 10000);
-			this.meshPos.count = Math.min(this.posBases.length, 10000);
+		// Bake static matrices once. Active mesh reuses these unless a ripple is animating.
+		const tmp = new THREE.Object3D();
+		for (let i = 0; i < this.negBases.length; i++) {
+			const b = this.negBases[i];
+			tmp.position.set(b.x, b.y, 0);
+			tmp.scale.set(b.s, b.s, 1);
+			tmp.updateMatrix();
+			this.meshNegBase.setMatrixAt(i, tmp.matrix);
+			this.meshNegActive.setMatrixAt(i, tmp.matrix);
 		}
+		for (let i = 0; i < this.posBases.length; i++) {
+			const b = this.posBases[i];
+			tmp.position.set(b.x, b.y, 0);
+			tmp.scale.set(b.s, b.s, 1);
+			tmp.updateMatrix();
+			this.meshPosBase.setMatrixAt(i, tmp.matrix);
+			this.meshPosActive.setMatrixAt(i, tmp.matrix);
+		}
+		this.meshNegBase.count = Math.min(this.negBases.length, 10000);
+		this.meshPosBase.count = Math.min(this.posBases.length, 10000);
+		this.meshNegBase.instanceMatrix.needsUpdate = true;
+		this.meshPosBase.instanceMatrix.needsUpdate = true;
+		this.meshNegActive.instanceMatrix.needsUpdate = true;
+		this.meshPosActive.instanceMatrix.needsUpdate = true;
 	}
 
 	private getAnimatedK(nowMs: number) {
