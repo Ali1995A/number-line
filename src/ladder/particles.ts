@@ -68,7 +68,9 @@ export class ParticleBlocks {
 		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
 		this.scene = new THREE.Scene();
-		this.camera = new THREE.OrthographicCamera(0, 1, 0, 1, -10, 10);
+		// Use a conventional pixel space: x=[0..w], y=[0..h] with y up.
+		// We'll store ripple/layout coordinates in DOM space (y down) and flip at render time.
+		this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -10, 10);
 		this.camera.position.set(0, 0, 1);
 
 		const geo = new THREE.PlaneGeometry(1, 1);
@@ -129,8 +131,8 @@ export class ParticleBlocks {
 		this.renderer.setSize(this.width, this.height, false);
 		this.camera.left = 0;
 		this.camera.right = this.width;
-		this.camera.top = 0;
-		this.camera.bottom = this.height;
+		this.camera.top = this.height;
+		this.camera.bottom = 0;
 		this.camera.updateProjectionMatrix();
 		this.layoutDirty = true;
 	}
@@ -189,7 +191,7 @@ export class ParticleBlocks {
 			const b = this.negBases[i];
 			const w = waveAt(b.x, b.y);
 			const scale = b.s * (1 + clamp(w, -0.55, 0.75));
-			tmp.position.set(b.x, b.y, 0);
+			tmp.position.set(b.x, this.height - b.y, 0);
 			tmp.scale.set(scale, scale, 1);
 			tmp.updateMatrix();
 			this.meshNeg.setMatrixAt(i, tmp.matrix);
@@ -200,7 +202,7 @@ export class ParticleBlocks {
 			const b = this.posBases[i];
 			const w = waveAt(b.x, b.y);
 			const scale = b.s * (1 + clamp(w, -0.55, 0.75));
-			tmp.position.set(b.x, b.y, 0);
+			tmp.position.set(b.x, this.height - b.y, 0);
 			tmp.scale.set(scale, scale, 1);
 			tmp.updateMatrix();
 			this.meshPos.setMatrixAt(i, tmp.matrix);
