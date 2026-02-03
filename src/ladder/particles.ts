@@ -130,55 +130,48 @@ export class ParticleBlocks {
 		this.camera.position.set(0, 0, 1);
 
 		const geo = new THREE.PlaneGeometry(1, 1);
-		const alphaTex = makeRoundedAlphaTexture();
+		// Opaque, kid-friendly blocks: avoid alpha masks/transparency which can look “foggy” on iPad.
+		const alphaTex = undefined;
 
 		this.stage = new THREE.Group();
 		this.scene.add(this.stage);
 
 		const makeField = () => {
 			const group = new THREE.Group();
-			// Base grid should be clearly visible on iPad, while still <= 0.5 alpha.
-			const baseOpacity = 0.20;
-			const activeOpacity = 0.50;
+			// Fully opaque per request (kids prefer bold, clean colors).
+			const baseOpacity = 1.0;
+			const activeOpacity = 1.0;
 
 			const matNegBase = new THREE.MeshBasicMaterial({
 				color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
-				transparent: true,
 				opacity: baseOpacity,
+				transparent: false,
 				depthTest: false,
 				depthWrite: false,
 			});
 			const matNegActive = new THREE.MeshBasicMaterial({
 				color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
-				transparent: true,
 				opacity: activeOpacity,
+				transparent: false,
 				depthTest: false,
 				depthWrite: false,
 			});
 			const matPosBase = new THREE.MeshBasicMaterial({
 				color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
-				transparent: true,
 				opacity: baseOpacity,
+				transparent: false,
 				depthTest: false,
 				depthWrite: false,
 			});
 			const matPosActive = new THREE.MeshBasicMaterial({
 				color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
-				transparent: true,
 				opacity: activeOpacity,
+				transparent: false,
 				depthTest: false,
 				depthWrite: false,
 			});
 
-			if (alphaTex) {
-				for (const mat of [matNegBase, matNegActive, matPosBase, matPosActive]) {
-					mat.alphaMap = alphaTex;
-					// Cut semi-transparent edge pixels to reduce “haze” from stacked quads,
-					// but keep enough coverage so particles remain clearly visible.
-					mat.alphaTest = 0.22;
-					mat.needsUpdate = true;
-				}
-			}
+			// No alpha maps / alpha tests.
 
 			const negBase = new THREE.InstancedMesh(geo, matNegBase, 10000);
 			const negActive = new THREE.InstancedMesh(geo, matNegActive, 10000);
@@ -771,39 +764,4 @@ function detectPerf() {
 	};
 }
 
-function makeRoundedAlphaTexture() {
-	const canvas = document.createElement("canvas");
-	canvas.width = 64;
-	canvas.height = 64;
-	const ctx = canvas.getContext("2d");
-	if (!ctx) return undefined;
-
-	ctx.clearRect(0, 0, canvas.width, canvas.height);
-	ctx.fillStyle = "rgba(255,255,255,1)";
-
-	const pad = 4;
-	const x = pad;
-	const y = pad;
-	const w = canvas.width - pad * 2;
-	const h = canvas.height - pad * 2;
-	const r = 14;
-
-	ctx.beginPath();
-	ctx.moveTo(x + r, y);
-	ctx.arcTo(x + w, y, x + w, y + h, r);
-	ctx.arcTo(x + w, y + h, x, y + h, r);
-	ctx.arcTo(x, y + h, x, y, r);
-	ctx.arcTo(x, y, x + w, y, r);
-	ctx.closePath();
-	ctx.fill();
-
-	const tex = new THREE.CanvasTexture(canvas);
-	tex.wrapS = THREE.ClampToEdgeWrapping;
-	tex.wrapT = THREE.ClampToEdgeWrapping;
-	// Nearest + no mipmaps: avoid soft edges that accumulate into a fog on iPad.
-	tex.generateMipmaps = false;
-	tex.minFilter = THREE.NearestFilter;
-	tex.magFilter = THREE.NearestFilter;
-	tex.needsUpdate = true;
-	return tex;
-}
+// (alpha texture removed: we render fully opaque blocks)
