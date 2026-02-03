@@ -374,9 +374,11 @@ export class ParticleBlocks {
 		if (this.kTransition) {
 			const tr = this.kTransition;
 			const t = clamp((nowMs - tr.startMs) / tr.durMs, 0, 1);
-			const e = this.easeInOutCubic(t);
-			const fromScale = Math.pow(10, -tr.dir * e);
-			const toScale = Math.pow(10, tr.dir * (1 - e));
+			const e = this.easeInOutQuint(t);
+			const pulse = this.zoomPulse(t);
+			const mul = 1 + 0.14 * pulse; // 0 at endpoints => exact 10× loop
+			const fromScale = Math.pow(10, -tr.dir * e) / mul;
+			const toScale = Math.pow(10, tr.dir * (1 - e)) * mul;
 
 			const fromField = this.fields[tr.fromField];
 			const toField = this.fields[tr.toField];
@@ -542,8 +544,13 @@ export class ParticleBlocks {
 		}
 	}
 
-	private easeInOutCubic(t: number) {
-		return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+	private easeInOutQuint(t: number) {
+		return t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
+	}
+
+	private zoomPulse(t: number) {
+		const s = Math.sin(Math.PI * clamp(t, 0, 1));
+		return s * s;
 	}
 }
 

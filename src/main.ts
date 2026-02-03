@@ -80,7 +80,7 @@ const stepper = new DiscreteStepper(state.k, (nextK) => {
 		fromK: state.k,
 		toK: nextK,
 		startAt: performance.now(),
-		durationMs: 280,
+		durationMs: 360,
 		fromEngine,
 		toEngine,
 		fromA: state.valueA,
@@ -154,12 +154,15 @@ function render() {
 		// Cross-zoom: scale + crossfade tick/label layers so the ruler feels “infinite”.
 		const fromVm = transition.fromEngine.numberLine.buildViewModel(transition.fromEngine.width);
 		const dir = Math.sign(transition.toK - transition.fromK) || 1;
+		const tRaw = ball.t;
 		const ease = ball.ease;
+		const pulse = zoomPulse(tRaw);
+		const zoomMul = 1 + 0.14 * pulse; // 0 at endpoints => exact 10× loop
 		// Always the same loop per step: scale by exactly 10× between adjacent k levels.
 		// k+1 (zoom out): old 1 -> 0.1, new 10 -> 1
 		// k-1 (zoom in):  old 1 -> 10,  new 0.1 -> 1
-		const fromScale = Math.pow(10, -dir * ease);
-		const toScale = Math.pow(10, dir * (1 - ease));
+		const fromScale = Math.pow(10, -dir * ease) / zoomMul;
+		const toScale = Math.pow(10, dir * (1 - ease)) * zoomMul;
 
 		layers.overlay.appendChild(
 			renderRulerLayer(fromVm, transition.fromEngine.numberLine.biggestTickPatternValue, labelsOpacity.from, transition.fromK, fromScale),
@@ -720,12 +723,13 @@ function computeBallPositions(eng: LadderEngine) {
 			xA: valueToXWithEngine(state.valueA, eng),
 			xB: valueToXWithEngine(state.valueB, eng),
 			labelsOpacity: { from: 0, to: 1 },
+			t: 1,
 			ease: 1,
 		};
 	}
 	const now = performance.now();
 	const t = clamp((now - transition.startAt) / transition.durationMs, 0, 1);
-	const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+	const ease = easeInOutQuint(t);
 
 	const xFromA = valueToXWithEngine(transition.fromA, transition.fromEngine);
 	const xToA = valueToXWithEngine(transition.toA, transition.toEngine);
@@ -742,8 +746,19 @@ function computeBallPositions(eng: LadderEngine) {
 		xA,
 		xB,
 		labelsOpacity: { from: 1 - ease, to: ease },
+		t,
 		ease,
 	};
+}
+
+function easeInOutQuint(t: number) {
+	return t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
+}
+
+function zoomPulse(t: number) {
+	// 0 at endpoints, gentle in the middle.
+	const s = Math.sin(Math.PI * clamp(t, 0, 1));
+	return s * s;
 }
 
 // Initial render + resize handling
