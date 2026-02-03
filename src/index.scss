@@ -82,6 +82,8 @@
 		border: 1px solid rgba(var(--nl-pink-dark), 0.55);
 		background: linear-gradient(180deg, rgba(var(--nl-pink), 1) 0%, rgba(var(--nl-pink-dark), 1) 100%);
 		color: white;
+		box-shadow: 0 1px 1px rgba(15, 23, 42, 0.06), 0 10px 22px rgba(236, 72, 153, 0.28);
+		text-shadow: 0 1px 0 rgba(15, 23, 42, 0.18);
 	}
 
 	.nl-input {
