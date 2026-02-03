@@ -2,6 +2,7 @@ import * as THREE from "three";
 
 type Ripple = { x: number; y: number; start: number };
 type MaskParams = { width: number; height: number; midX: number; ballAx: number; ballBx: number };
+type MaskParamsV2 = MaskParams & { k: number; valueA: number; valueB: number };
 
 export class ParticleRipples {
 	private impl: WebGLPointsImpl | Canvas2DImpl;
@@ -18,7 +19,7 @@ export class ParticleRipples {
 		this.impl = new Canvas2DImpl(host, beforeEl);
 	}
 
-	setMask(params: MaskParams) {
+	setMask(params: MaskParamsV2) {
 		this.impl.setMask(params);
 	}
 
@@ -43,10 +44,14 @@ class Canvas2DImpl {
 	private destroyed = false;
 	private width = 1;
 	private height = 1;
+	private k = 0;
 	private midX = 0.5;
 	private ballAx = 0.5;
 	private ballBx = 0.5;
+	private valueA = 0;
+	private valueB = 0;
 	private particles: Array<{ x: number; y: number; seed: number }> = [];
+	private dirty = true;
 
 	constructor(private host: HTMLElement, private beforeEl?: Element) {
 		this.canvas = makeCanvas();
@@ -61,16 +66,21 @@ class Canvas2DImpl {
 		this.start();
 	}
 
-	setMask(params: MaskParams) {
+	setMask(params: MaskParamsV2) {
+		this.k = params.k;
 		this.midX = params.midX;
 		this.ballAx = params.ballAx;
 		this.ballBx = params.ballBx;
+		this.valueA = params.valueA;
+		this.valueB = params.valueB;
+		this.dirty = true;
 	}
 
 	addRipple(x: number, y: number) {
 		const now = performance.now() / 1000;
 		this.ripples.push({ x, y, start: now }, { x: this.width - x, y, start: now });
 		if (this.ripples.length > 16) this.ripples.splice(0, this.ripples.length - 16);
+		this.dirty = true;
 	}
 
 	resize() {
@@ -84,6 +94,7 @@ class Canvas2DImpl {
 		this.canvas.style.height = "100%";
 		this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		this.rebuildParticles();
+		this.dirty = true;
 	}
 
 	destroy() {
@@ -95,76 +106,140 @@ class Canvas2DImpl {
 		const loop = () => {
 			if (this.destroyed) return;
 			const t = performance.now() / 1000;
+			const before = this.ripples.length;
 			this.ripples = this.ripples.filter((r) => t - r.start < 2.0);
-			this.draw(t);
+			const hasRipples = this.ripples.length > 0 || before > 0;
+			if (hasRipples || this.dirty) {
+				this.draw(t);
+				this.dirty = false;
+			}
 			this.rafId = requestAnimationFrame(loop);
 		};
 		this.rafId = requestAnimationFrame(loop);
 	}
 
 	private rebuildParticles() {
-		const spacing = clampInt(Math.round(Math.min(this.width, this.height) / 34), 7, 14);
-		const xs = Math.max(1, Math.floor(this.width / spacing));
-		const ys = Math.max(1, Math.floor(this.height / spacing));
+		// no-op: particle positions are derived from the dot-matrix grid per ball region
 		this.particles = [];
-		for (let y = 0; y < ys; y++) {
-			for (let x = 0; x < xs; x++) {
-				this.particles.push({
-					x: x * spacing + spacing * 0.5,
-					y: y * spacing + spacing * 0.5,
-					seed: (x * 928371 + y * 1237) % 997,
-				});
-			}
-		}
-	}
-
-	private maskAt(x: number) {
-		const edge = 14;
-		const intervalMask = (a: number, b: number) => {
-			const lo = Math.min(a, b);
-			const hi = Math.max(a, b);
-			const m1 = smoothstep(lo, lo + edge, x);
-			const m2 = 1 - smoothstep(hi - edge, hi, x);
-			return m1 * m2;
-		};
-		const mask = Math.max(intervalMask(this.midX, this.ballAx), intervalMask(this.midX, this.ballBx));
-		// faint center band so it never looks "broken"
-		const moved = Math.abs(this.ballAx - this.midX) + Math.abs(this.ballBx - this.midX);
-		const band = Math.exp(-Math.abs(x - this.midX) / 200) * 0.32 * (1 - smoothstep(0, 10, moved));
-		return Math.max(mask, band);
 	}
 
 	private draw(time: number) {
 		const ctx = this.ctx;
 		ctx.clearRect(0, 0, this.width, this.height);
-		for (const p of this.particles) {
-			const mask = this.maskAt(p.x);
-			if (mask <= 0.001) continue;
-			const side = p.x >= this.midX ? 1 : 0;
-			let wave = 0;
-			for (const r of this.ripples) {
-				const dt = time - r.start;
-				if (dt < 0) continue;
-				const dx = p.x - r.x;
-				const dy = p.y - r.y;
-				const d = Math.hypot(dx, dy);
-				const w = Math.sin(d * 0.10 - dt * 7.0);
-				const env = Math.exp(-dt * 1.35) * Math.exp(-d * 0.02);
-				wave += w * env;
+		const bottomPad = 80;
+		const topPad = 14;
+		const areaTop = topPad;
+		const areaHeight = Math.max(60, this.height - bottomPad - topPad);
+
+		// 100x100循环：每 4 个 k 完成一次 10000 容量的点阵填满
+		const level = this.k === 0 ? 0 : Math.floor((this.k - 1) / 4);
+		const base = Math.pow(10, 4 * level); // 每个点代表的数值
+		const maxDots = Math.pow(10, this.k - 4 * level); // 1/10/100/1000/10000
+
+		const grid = dotGridDims(maxDots);
+		const drawRegion = (ballX: number, rawValue: number, side: "neg" | "pos") => {
+			const start = Math.min(this.midX, ballX);
+			const end = Math.max(this.midX, ballX);
+			const regionW = Math.max(0, end - start);
+			if (regionW < 24) return;
+
+			const marginX = 14;
+			const marginY = 10;
+			const gx = start + marginX;
+			const gy = areaTop + marginY;
+			const gw = Math.max(1, regionW - marginX * 2);
+			const gh = Math.max(1, areaHeight - marginY * 2);
+
+			const cellW = gw / grid.cols;
+			const cellH = gh / grid.rows;
+			const dotR = clamp(Math.min(cellW, cellH) * 0.28, 1.3, 5.5);
+
+			const absValue = Math.abs(Math.round(rawValue));
+			const filled = clampInt(Math.floor(absValue / base), 0, maxDots);
+
+			// aesthetic: faint empty dots + stronger filled dots
+			const emptyAlpha = 0.10;
+			const filledAlphaBase = 0.34; // <=0.5
+			const filledAlphaWave = 0.14; // <=0.5 total
+
+			const emptyColor = side === "pos" ? `rgba(236,72,153,${emptyAlpha})` : `rgba(139,92,246,${emptyAlpha})`;
+			const filledColor = (a: number) =>
+				side === "pos" ? `rgba(236,72,153,${a})` : `rgba(139,92,246,${a})`;
+
+			// draw group boundaries (10x10) only when grid is "big"
+			if (grid.cols >= 100 || grid.rows >= 100) {
+				ctx.save();
+				ctx.strokeStyle = "rgba(15,23,42,0.06)";
+				ctx.lineWidth = 1;
+				for (let c = 10; c < grid.cols; c += 10) {
+					const x = gx + c * cellW;
+					ctx.beginPath();
+					ctx.moveTo(x, gy);
+					ctx.lineTo(x, gy + gh);
+					ctx.stroke();
+				}
+				for (let r = 10; r < grid.rows; r += 10) {
+					const y = gy + r * cellH;
+					ctx.beginPath();
+					ctx.moveTo(gx, y);
+					ctx.lineTo(gx + gw, y);
+					ctx.stroke();
+				}
+				ctx.restore();
 			}
 
-			const baseA = 0.26;
-			const glow = clamp(Math.abs(wave), 0, 1) * 0.22;
-			let a = mask * (baseA + glow);
-			if (a > 0.5) a = 0.5;
+			// empty dots (fast path)
+			ctx.fillStyle = emptyColor;
+			for (let i = 0; i < grid.capacity; i++) {
+				const col = i % grid.cols;
+				const row = Math.floor(i / grid.cols);
+				if (row >= grid.rows) break;
+				const px = gx + (col + 0.5) * cellW;
+				const py = gy + (row + 0.5) * cellH;
+				ctx.beginPath();
+				ctx.arc(px, py, dotR, 0, Math.PI * 2);
+				ctx.fill();
+			}
 
-			const color = side === 1 ? `rgba(236,72,153,${a})` : `rgba(139,92,246,${a})`;
-			ctx.fillStyle = color;
-			const size = 1.8 + ((p.seed % 10) / 10) * 1.4 + clamp(wave, 0, 1) * 1.8;
-			ctx.beginPath();
-			ctx.arc(p.x, p.y + wave * 3.5, size, 0, Math.PI * 2);
-			ctx.fill();
-		}
+			// filled dots with ripple highlight
+			for (let i = 0; i < filled; i++) {
+				const col = i % grid.cols;
+				const row = Math.floor(i / grid.cols);
+				const px = gx + (col + 0.5) * cellW;
+				const py0 = gy + (row + 0.5) * cellH;
+
+				let wave = 0;
+				for (const r of this.ripples) {
+					const dt = time - r.start;
+					if (dt < 0) continue;
+					const dx = px - r.x;
+					const dy = py0 - r.y;
+					const d = Math.hypot(dx, dy);
+					const w = Math.sin(d * 0.10 - dt * 7.0);
+					const env = Math.exp(-dt * 1.35) * Math.exp(-d * 0.02);
+					wave += w * env;
+				}
+
+				const a = clamp(filledAlphaBase + clamp(Math.abs(wave), 0, 1) * filledAlphaWave, 0, 0.5);
+				ctx.fillStyle = filledColor(a);
+				const py = py0 + wave * 3.0;
+				const rr = dotR + clamp(wave, 0, 1) * 1.4;
+				ctx.beginPath();
+				ctx.arc(px, py, rr, 0, Math.PI * 2);
+				ctx.fill();
+			}
+
+			// label hint (small, subtle): what each dot means in this level
+			ctx.save();
+			ctx.fillStyle = "rgba(15,23,42,0.36)";
+			ctx.font = "12px -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial";
+			const label = base === 1 ? "1/点" : `${formatPower(base)}/点`;
+			ctx.fillText(label, gx + 2, gy + gh + 16);
+			ctx.restore();
+		};
+
+		drawRegion(this.ballAx, this.valueA, this.valueA >= 0 ? "pos" : "neg");
+		drawRegion(this.ballBx, this.valueB, this.valueB >= 0 ? "pos" : "neg");
 	}
 }
 
@@ -248,7 +323,7 @@ class WebGLPointsImpl {
 		this.start();
 	}
 
-	setMask(params: MaskParams) {
+	setMask(params: MaskParamsV2) {
 		this.midX = params.midX;
 		this.ballAx = params.ballAx;
 		this.ballBx = params.ballBx;
@@ -421,4 +496,21 @@ function canUseWebGL() {
 
 function clampInt(value: number, min: number, max: number) {
 	return Math.min(Math.max(value, min), max);
+}
+
+function dotGridDims(maxDots: number) {
+	// maxDots is one of: 1,10,100,1000,10000
+	if (maxDots >= 10000) return { cols: 100, rows: 100, capacity: 10000 };
+	if (maxDots >= 1000) return { cols: 100, rows: 10, capacity: 1000 };
+	if (maxDots >= 100) return { cols: 10, rows: 10, capacity: 100 };
+	if (maxDots >= 10) return { cols: 10, rows: 1, capacity: 10 };
+	return { cols: 1, rows: 1, capacity: 1 };
+}
+
+function formatPower(n: number) {
+	if (n === 10000) return "10^4";
+	if (n === 100000000) return "10^8";
+	const k = Math.round(Math.log10(n));
+	if (Number.isFinite(k) && Math.pow(10, k) === n) return `10^${k}`;
+	return String(n);
 }

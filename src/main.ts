@@ -141,9 +141,12 @@ function render() {
 	particles.setMask({
 		width: engine.width,
 		height,
+		k: state.k,
 		midX: engine.width / 2,
 		ballAx: ball.xA,
 		ballBx: ball.xB,
+		valueA: state.valueA,
+		valueB: state.valueB,
 	});
 
 	const vm = engine.numberLine.buildViewModel(engine.width);
