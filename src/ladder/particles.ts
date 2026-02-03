@@ -20,8 +20,9 @@ export type BlockParams = {
 	valueB: number;
 };
 
-const NEG_RGB = { r: 125, g: 211, b: 252 }; // light blue
-const POS_RGB = { r: 244, g: 114, b: 182 }; // light pink
+// More saturated, kid-friendly colors (still soft).
+const NEG_RGB = { r: 56, g: 189, b: 248 }; // sky-400
+const POS_RGB = { r: 251, g: 113, b: 133 }; // rose-400
 
 export class ParticleBlocks {
 	private canvas: HTMLCanvasElement;
@@ -81,6 +82,8 @@ export class ParticleBlocks {
 		});
 		this.renderer.setClearColor(0x000000, 0);
 		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+		// Make colors pop correctly on iPad/Safari (sRGB output).
+		this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 		this.scene = new THREE.Scene();
 		// Use a conventional pixel space: x=[0..w], y=[0..h] with y up.
@@ -96,14 +99,14 @@ export class ParticleBlocks {
 		const matNegBase = new THREE.MeshBasicMaterial({
 			color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
 			transparent: true,
-			opacity: 0.12, // faint inactive grid
+			opacity: 0.22, // clearer inactive grid (<= 0.5)
 			depthTest: false,
 			depthWrite: false,
 		});
 		const matNegActive = new THREE.MeshBasicMaterial({
 			color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
 			transparent: true,
-			opacity: 0.5, // <= 0.5
+			opacity: 0.5, // <= 0.5 (max allowed)
 			depthTest: false,
 			depthWrite: false,
 		});
@@ -118,14 +121,14 @@ export class ParticleBlocks {
 		const matPosBase = new THREE.MeshBasicMaterial({
 			color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
 			transparent: true,
-			opacity: 0.12, // faint inactive grid
+			opacity: 0.22, // clearer inactive grid (<= 0.5)
 			depthTest: false,
 			depthWrite: false,
 		});
 		const matPosActive = new THREE.MeshBasicMaterial({
 			color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
 			transparent: true,
-			opacity: 0.5, // <= 0.5
+			opacity: 0.5, // <= 0.5 (max allowed)
 			depthTest: false,
 			depthWrite: false,
 		});
