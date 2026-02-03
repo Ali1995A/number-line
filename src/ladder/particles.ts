@@ -137,15 +137,14 @@ export class ParticleBlocks {
 
 		const makeField = () => {
 			const group = new THREE.Group();
-			// Base grid should feel present but not “foggy”.
-			const baseOpacity = 0.14;
-			const activeOpacity = 0.48;
+			// Base grid should be clearly visible on iPad, while still <= 0.5 alpha.
+			const baseOpacity = 0.20;
+			const activeOpacity = 0.50;
 
 			const matNegBase = new THREE.MeshBasicMaterial({
 				color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
 				transparent: true,
 				opacity: baseOpacity,
-				blending: THREE.AdditiveBlending,
 				depthTest: false,
 				depthWrite: false,
 			});
@@ -160,7 +159,6 @@ export class ParticleBlocks {
 				color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
 				transparent: true,
 				opacity: baseOpacity,
-				blending: THREE.AdditiveBlending,
 				depthTest: false,
 				depthWrite: false,
 			});
@@ -175,8 +173,9 @@ export class ParticleBlocks {
 			if (alphaTex) {
 				for (const mat of [matNegBase, matNegActive, matPosBase, matPosActive]) {
 					mat.alphaMap = alphaTex;
-					// Cut semi-transparent edge pixels to avoid “haze” from stacked quads.
-					mat.alphaTest = 0.65;
+					// Cut semi-transparent edge pixels to reduce “haze” from stacked quads,
+					// but keep enough coverage so particles remain clearly visible.
+					mat.alphaTest = 0.22;
 					mat.needsUpdate = true;
 				}
 			}
