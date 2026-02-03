@@ -137,13 +137,15 @@ export class ParticleBlocks {
 
 		const makeField = () => {
 			const group = new THREE.Group();
-			const baseOpacity = 0.22;
-			const activeOpacity = 0.5;
+			// Base grid should feel present but not “foggy”.
+			const baseOpacity = 0.14;
+			const activeOpacity = 0.48;
 
 			const matNegBase = new THREE.MeshBasicMaterial({
 				color: new THREE.Color(NEG_RGB.r / 255, NEG_RGB.g / 255, NEG_RGB.b / 255),
 				transparent: true,
 				opacity: baseOpacity,
+				blending: THREE.AdditiveBlending,
 				depthTest: false,
 				depthWrite: false,
 			});
@@ -158,6 +160,7 @@ export class ParticleBlocks {
 				color: new THREE.Color(POS_RGB.r / 255, POS_RGB.g / 255, POS_RGB.b / 255),
 				transparent: true,
 				opacity: baseOpacity,
+				blending: THREE.AdditiveBlending,
 				depthTest: false,
 				depthWrite: false,
 			});
@@ -172,7 +175,8 @@ export class ParticleBlocks {
 			if (alphaTex) {
 				for (const mat of [matNegBase, matNegActive, matPosBase, matPosActive]) {
 					mat.alphaMap = alphaTex;
-					mat.alphaTest = 0.02;
+					// Cut semi-transparent edge pixels to avoid “haze” from stacked quads.
+					mat.alphaTest = 0.65;
 					mat.needsUpdate = true;
 				}
 			}
@@ -797,8 +801,10 @@ function makeRoundedAlphaTexture() {
 	const tex = new THREE.CanvasTexture(canvas);
 	tex.wrapS = THREE.ClampToEdgeWrapping;
 	tex.wrapT = THREE.ClampToEdgeWrapping;
-	tex.minFilter = THREE.LinearFilter;
-	tex.magFilter = THREE.LinearFilter;
+	// Nearest + no mipmaps: avoid soft edges that accumulate into a fog on iPad.
+	tex.generateMipmaps = false;
+	tex.minFilter = THREE.NearestFilter;
+	tex.magFilter = THREE.NearestFilter;
 	tex.needsUpdate = true;
 	return tex;
 }
