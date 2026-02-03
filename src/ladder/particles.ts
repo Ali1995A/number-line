@@ -85,6 +85,11 @@ export class ParticleBlocks {
 	private dirtyNegMark = new Uint8Array(10000);
 	private dirtyPosMark = new Uint8Array(10000);
 
+	// Ripple model (traveling wavefront).
+	private rippleSpeedPx = 520; // px/s
+	private rippleBandPx = 140; // thickness of the main ring
+	private rippleDecay = 0.75; // time decay
+
 	constructor(private host: HTMLElement, private beforeEl?: Element) {
 		this.canvas = document.createElement("canvas");
 		this.canvas.className = "nl-particles";
@@ -282,7 +287,9 @@ export class ParticleBlocks {
 			this.needsFrame = false;
 
 			const t = performance.now() / 1000;
-			this.ripples = this.ripples.filter((r) => t - r.start < 2.0);
+			const diag = Math.hypot(this.width, this.height);
+			const life = diag / this.rippleSpeedPx + 1.2; // long enough to reach edges + settle
+			this.ripples = this.ripples.filter((r) => t - r.start < life);
 			this.renderFrame(t);
 
 			// Continue animating only while ripples are alive, we need to restore deformations,
@@ -316,6 +323,7 @@ export class ParticleBlocks {
 
 		const hasRipples = this.ripples.length > 0;
 		const waveAt = (x: number, y: number) => {
+			// Traveling wavefront (ring) that expands until it exits the container.
 			let wave = 0;
 			for (const r of this.ripples) {
 				const dt = time - r.start;
@@ -323,9 +331,22 @@ export class ParticleBlocks {
 				const dx = x - r.x;
 				const dy = y - r.y;
 				const d = Math.hypot(dx, dy);
-				const w = Math.sin(d * 0.07 - dt * 8.2);
-				const env = Math.exp(-dt * 0.85) * Math.exp(-d * 0.012);
-				wave += w * env;
+
+				const radius = this.rippleSpeedPx * dt;
+				const band = this.rippleBandPx;
+				const u = d - radius;
+
+				// Envelope centered on the ring, with gentle time decay.
+				const ringEnv = Math.exp(-(u * u) / (2 * band * band));
+				const timeEnv = Math.exp(-dt * this.rippleDecay);
+				const distEnv = 1 / Math.sqrt(1 + d * 0.012);
+
+				// Oscillation along the wavefront.
+				const freq = 0.11;
+				const phase = -dt * 10.5;
+				const w = Math.sin(u * freq + phase);
+
+				wave += w * ringEnv * timeEnv * distEnv;
 			}
 			return wave;
 		};
@@ -610,17 +631,13 @@ export class ParticleBlocks {
 		const { cell, padAxis, oy } = this.layoutMeta;
 
 		// Compute affected grid window per ripple, update only those indices.
-		const radiusPx = 220;
-		const radiusLocal = radiusPx / Math.max(1e-3, fieldScale);
-		const radiusCells = clampInt(Math.ceil(radiusLocal / cell) + 2, 3, 40);
-
 		const y0 = this.height * 0.5 - oy; // approx inversion constant
 
 		const tmp = new THREE.Object3D();
 		const deform = (idx: number, base: { x: number; y: number; s: number }, mesh: THREE.InstancedMesh) => {
 			const w = waveAt(midX + base.x * fieldScale, midY + base.y * fieldScale);
 			// Smaller amplitude for base grid (so it doesn't overpower active count).
-			const s = base.s * (1 + clamp(w, -0.25, 0.35));
+			const s = base.s * (1 + clamp(w, -0.30, 0.45));
 			tmp.position.set(base.x, base.y, 0);
 			tmp.scale.set(s, s, 1);
 			tmp.updateMatrix();
@@ -628,6 +645,13 @@ export class ParticleBlocks {
 		};
 
 		for (const r of this.ripples) {
+			const dt = timeSec - r.start;
+			if (dt < 0) continue;
+			const radius = this.rippleSpeedPx * dt;
+			const band = this.rippleBandPx;
+			const maxRange = radius + band;
+			const radiusCells = clampInt(Math.ceil((maxRange / Math.max(1e-3, fieldScale)) / cell) + 2, 6, 120);
+
 			// Convert ripple center to local coords (relative center) for index estimation.
 			const lx = (r.x - midX) / Math.max(1e-3, fieldScale);
 			const ly = (r.y - midY) / Math.max(1e-3, fieldScale);
@@ -647,11 +671,15 @@ export class ParticleBlocks {
 				for (let row = rowMin; row <= rowMax; row++) {
 					for (let col = colMin; col <= colMax; col++) {
 						const idx = row * 100 + col;
+						// Only deform the current wavefront band (keeps perf good as it expands).
+						const b = this.negBases[idx];
+						const d = Math.hypot(midX + b.x * fieldScale - r.x, midY + b.y * fieldScale - r.y);
+						if (Math.abs(d - radius) > band * 2.2) continue;
 						if (this.dirtyNegMark[idx] === 0) {
 							this.dirtyNegMark[idx] = 1;
 							this.dirtyNeg[this.dirtyNegLen++] = idx;
 						}
-						deform(idx, this.negBases[idx], field.negBase);
+						deform(idx, b, field.negBase);
 					}
 				}
 				field.negBase.instanceMatrix.needsUpdate = true;
@@ -659,11 +687,14 @@ export class ParticleBlocks {
 				for (let row = rowMin; row <= rowMax; row++) {
 					for (let col = colMin; col <= colMax; col++) {
 						const idx = row * 100 + col;
+						const b = this.posBases[idx];
+						const d = Math.hypot(midX + b.x * fieldScale - r.x, midY + b.y * fieldScale - r.y);
+						if (Math.abs(d - radius) > band * 2.2) continue;
 						if (this.dirtyPosMark[idx] === 0) {
 							this.dirtyPosMark[idx] = 1;
 							this.dirtyPos[this.dirtyPosLen++] = idx;
 						}
-						deform(idx, this.posBases[idx], field.posBase);
+						deform(idx, b, field.posBase);
 					}
 				}
 				field.posBase.instanceMatrix.needsUpdate = true;
