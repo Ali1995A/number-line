@@ -455,13 +455,12 @@ export class ParticleBlocks {
 
 		const { midX } = this.params;
 
-		const bottomPad = 84;
-		const topPad = 14;
-		const regionTop = topPad;
-		const regionH = Math.max(60, this.height - bottomPad - topPad);
+		// Fill the whole axis container (no empty bands). Overlay (ticks/labels/balls) sits above.
+		const regionTop = 0;
+		const regionH = Math.max(1, this.height);
 
 		const marginX = 14;
-		const marginY = 12;
+		const marginY = 0;
 
 		const gy = regionTop + marginY;
 		const gh = Math.max(1, regionH - marginY * 2);
@@ -476,18 +475,21 @@ export class ParticleBlocks {
 			const gaps = dim / chunk - 1; // 9
 			const gapFrac = 0.65;
 
-			// Choose cell size primarily from height (so spacing is stable). We intentionally
-			// allow the field to extend beyond the side width — it gets clipped by overflow,
-			// which sells the “infinite canvas” feeling and avoids empty bands near the axis.
-			const cell = Math.max(2.2, gh / (dim + gaps * gapFrac));
+			const sideW = side === "left" ? midX : Math.max(1, this.width - midX);
+			const padAxis = Math.max(8, marginX);
+
+			// Choose a cell size that fills the container in at least one dimension.
+			// If it overflows the other dimension, it will be clipped by overflow-hidden,
+			// which makes the field feel “infinite” while avoiding blank margins.
+			const denom = dim + gaps * gapFrac;
+			const cellH = gh / denom;
+			const cellW = Math.max(1, sideW - padAxis) / denom;
+			const cell = Math.max(2.2, cellH, cellW);
 			const gapPx = cell * gapFrac;
 			const s = Math.max(1.6, cell * 0.84);
 
-			const fieldH = dim * cell + gaps * gapPx;
-			const oy = gy + Math.max(0, (gh - fieldH) / 2);
-
-			// Small padding so particles don't overlap the 0-line / badge.
-			const padAxis = Math.max(8, marginX);
+			// No vertical centering gap — start from top and tile through height.
+			const oy = gy;
 
 			for (let row = 0; row < dim; row++) {
 				for (let colFill = 0; colFill < dim; colFill++) {
