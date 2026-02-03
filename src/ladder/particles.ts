@@ -31,6 +31,7 @@ export class ParticleBlocks {
 	private meshPos: THREE.InstancedMesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
 
 	private rafId: number | null = null;
+	private needsFrame = true;
 	private destroyed = false;
 
 	private width = 1;
@@ -39,6 +40,7 @@ export class ParticleBlocks {
 	private ripples: Ripple[] = [];
 
 	private layoutDirty = true;
+	private renderedOnce = false;
 
 	// cached per-instance base transforms
 	private negBases: Array<{ x: number; y: number; s: number }> = [];
@@ -108,20 +110,29 @@ export class ParticleBlocks {
 		this.scene.add(this.meshNeg, this.meshPos);
 
 		this.resize();
-		this.start();
+		this.requestFrame();
 	}
 
 	set(params: BlockParams) {
+		const nextW = Math.max(1, Math.floor(params.width));
+		const nextH = Math.max(1, Math.floor(params.height));
+		const sizeChanged = nextW !== this.width || nextH !== this.height;
+		const kChanged = !this.params || this.params.k !== params.k;
+
 		this.params = params;
-		this.width = Math.max(1, Math.floor(params.width));
-		this.height = Math.max(1, Math.floor(params.height));
-		this.layoutDirty = true;
+		this.width = nextW;
+		this.height = nextH;
+
+		// Only rebuild the field layout if size or k changed; otherwise curtain reveal is just a cull window.
+		this.layoutDirty = this.layoutDirty || sizeChanged || kChanged;
+		this.requestFrame();
 	}
 
 	addRipple(x: number, y: number) {
 		const now = performance.now() / 1000;
 		this.ripples.push({ x, y, start: now }, { x: this.width - x, y, start: now });
 		if (this.ripples.length > 16) this.ripples.splice(0, this.ripples.length - 16);
+		this.requestFrame();
 	}
 
 	resize() {
@@ -135,6 +146,7 @@ export class ParticleBlocks {
 		this.camera.bottom = 0;
 		this.camera.updateProjectionMatrix();
 		this.layoutDirty = true;
+		this.requestFrame();
 	}
 
 	destroy() {
@@ -148,13 +160,25 @@ export class ParticleBlocks {
 		this.renderer.dispose();
 	}
 
-	private start() {
+	private requestFrame() {
+		if (this.destroyed) return;
+		this.needsFrame = true;
+		if (this.rafId != null) return;
 		const loop = () => {
+			this.rafId = null;
 			if (this.destroyed) return;
+			if (!this.needsFrame) return;
+			this.needsFrame = false;
+
 			const t = performance.now() / 1000;
 			this.ripples = this.ripples.filter((r) => t - r.start < 2.0);
 			this.renderFrame(t);
-			this.rafId = requestAnimationFrame(loop);
+
+			// Continue animating only while ripples are alive (or a layout update comes in).
+			if (this.ripples.length > 0 || this.layoutDirty) {
+				this.needsFrame = true;
+				this.rafId = requestAnimationFrame(loop);
+			}
 		};
 		this.rafId = requestAnimationFrame(loop);
 	}
@@ -186,30 +210,44 @@ export class ParticleBlocks {
 		};
 
 		const tmp = new THREE.Object3D();
+		const midX = this.params.midX;
+		const leftMost = Math.min(midX, this.params.ballAx, this.params.ballBx);
+		const rightMost = Math.max(midX, this.params.ballAx, this.params.ballBx);
 
+		// Curtain reveal window: covered regions do NOT get ripple calculations.
+		const negMinX = clamp(leftMost, 0, midX);
+		const posMaxX = clamp(rightMost, midX, this.width);
+
+		let outNeg = 0;
 		for (let i = 0; i < this.negBases.length; i++) {
 			const b = this.negBases[i];
+			if (b.x < negMinX) continue;
 			const w = waveAt(b.x, b.y);
 			const scale = b.s * (1 + clamp(w, -0.55, 0.75));
 			tmp.position.set(b.x, this.height - b.y, 0);
 			tmp.scale.set(scale, scale, 1);
 			tmp.updateMatrix();
-			this.meshNeg.setMatrixAt(i, tmp.matrix);
+			this.meshNeg.setMatrixAt(outNeg++, tmp.matrix);
 		}
+		this.meshNeg.count = outNeg;
 		this.meshNeg.instanceMatrix.needsUpdate = true;
 
+		let outPos = 0;
 		for (let i = 0; i < this.posBases.length; i++) {
 			const b = this.posBases[i];
+			if (b.x > posMaxX) continue;
 			const w = waveAt(b.x, b.y);
 			const scale = b.s * (1 + clamp(w, -0.55, 0.75));
 			tmp.position.set(b.x, this.height - b.y, 0);
 			tmp.scale.set(scale, scale, 1);
 			tmp.updateMatrix();
-			this.meshPos.setMatrixAt(i, tmp.matrix);
+			this.meshPos.setMatrixAt(outPos++, tmp.matrix);
 		}
+		this.meshPos.count = outPos;
 		this.meshPos.instanceMatrix.needsUpdate = true;
 
 		this.renderer.render(this.scene, this.camera);
+		this.renderedOnce = true;
 	}
 
 	private rebuildLayout() {
@@ -271,8 +309,11 @@ export class ParticleBlocks {
 		buildField(0, midX, this.negBases);
 		buildField(midX, this.width, this.posBases);
 
-		this.meshNeg.count = Math.min(this.negBases.length, 10000);
-		this.meshPos.count = Math.min(this.posBases.length, 10000);
+		// Count is determined each frame by the curtain reveal window.
+		if (!this.renderedOnce) {
+			this.meshNeg.count = Math.min(this.negBases.length, 10000);
+			this.meshPos.count = Math.min(this.posBases.length, 10000);
+		}
 	}
 }
 
