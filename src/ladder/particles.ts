@@ -4,6 +4,9 @@ type Ripple = { x: number; y: number; start: number };
 type MaskParams = { width: number; height: number; midX: number; ballAx: number; ballBx: number };
 type MaskParamsV2 = MaskParams & { k: number; valueA: number; valueB: number };
 
+const NEG_RGB = { r: 125, g: 211, b: 252 }; // light blue (sky-300)
+const POS_RGB = { r: 244, g: 114, b: 182 }; // light pink (pink-400)
+
 export class ParticleRipples {
 	private impl: WebGLPointsImpl | Canvas2DImpl;
 
@@ -158,13 +161,13 @@ class Canvas2DImpl {
 			const filled = clampInt(Math.floor(absValue / base), 0, maxDots);
 
 			// aesthetic: faint empty dots + stronger filled dots
-			const emptyAlpha = 0.10;
-			const filledAlphaBase = 0.34; // <=0.5
-			const filledAlphaWave = 0.14; // <=0.5 total
+			const emptyAlpha = 0.12;
+			const filledAlphaBase = 0.38; // <=0.5
+			const filledAlphaWave = 0.12; // <=0.5 total
 
-			const emptyColor = side === "pos" ? `rgba(236,72,153,${emptyAlpha})` : `rgba(139,92,246,${emptyAlpha})`;
-			const filledColor = (a: number) =>
-				side === "pos" ? `rgba(236,72,153,${a})` : `rgba(139,92,246,${a})`;
+			const rgb = side === "pos" ? POS_RGB : NEG_RGB;
+			const emptyColor = `rgba(${rgb.r},${rgb.g},${rgb.b},${emptyAlpha})`;
+			const filledColor = (a: number) => `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
 
 			// draw group boundaries (10x10) only when grid is "big"
 			if (grid.cols >= 100 || grid.rows >= 100) {
@@ -188,6 +191,29 @@ class Canvas2DImpl {
 				ctx.restore();
 			}
 
+			// ripple rings (very visible but alpha <= 0.5), clipped to region
+			if (this.ripples.length) {
+				ctx.save();
+				ctx.beginPath();
+				ctx.rect(gx, gy, gw, gh);
+				ctx.clip();
+				for (const r of this.ripples) {
+					const dt = time - r.start;
+					if (dt < 0) continue;
+					const radius = dt * 110;
+					if (radius > Math.max(this.width, this.height) * 1.4) continue;
+					const fade = Math.exp(-dt * 1.1);
+					const a = clamp(0.28 * fade, 0, 0.5);
+					if (a <= 0.01) continue;
+					ctx.strokeStyle = filledColor(a);
+					ctx.lineWidth = 2;
+					ctx.beginPath();
+					ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
+					ctx.stroke();
+				}
+				ctx.restore();
+			}
+
 			// empty dots (fast path)
 			ctx.fillStyle = emptyColor;
 			for (let i = 0; i < grid.capacity; i++) {
@@ -201,7 +227,7 @@ class Canvas2DImpl {
 				ctx.fill();
 			}
 
-			// filled dots with ripple highlight
+			// filled dots with ripple highlight + gentle displacement
 			for (let i = 0; i < filled; i++) {
 				const col = i % grid.cols;
 				const row = Math.floor(i / grid.cols);
@@ -215,14 +241,14 @@ class Canvas2DImpl {
 					const dx = px - r.x;
 					const dy = py0 - r.y;
 					const d = Math.hypot(dx, dy);
-					const w = Math.sin(d * 0.10 - dt * 7.0);
-					const env = Math.exp(-dt * 1.35) * Math.exp(-d * 0.02);
+					const w = Math.sin(d * 0.075 - dt * 5.4);
+					const env = Math.exp(-dt * 0.95) * Math.exp(-d * 0.013);
 					wave += w * env;
 				}
 
 				const a = clamp(filledAlphaBase + clamp(Math.abs(wave), 0, 1) * filledAlphaWave, 0, 0.5);
 				ctx.fillStyle = filledColor(a);
-				const py = py0 + wave * 3.0;
+				const py = py0 + wave * 6.0;
 				const rr = dotR + clamp(wave, 0, 1) * 1.4;
 				ctx.beginPath();
 				ctx.arc(px, py, rr, 0, Math.PI * 2);
@@ -383,8 +409,8 @@ class WebGLPointsImpl {
 
 		const moved = Math.abs(this.ballAx - this.midX) + Math.abs(this.ballBx - this.midX);
 
-		const cool = { r: 139 / 255, g: 92 / 255, b: 246 / 255 };
-		const warm = { r: 236 / 255, g: 72 / 255, b: 153 / 255 };
+		const cool = { r: NEG_RGB.r / 255, g: NEG_RGB.g / 255, b: NEG_RGB.b / 255 };
+		const warm = { r: POS_RGB.r / 255, g: POS_RGB.g / 255, b: POS_RGB.b / 255 };
 
 		for (let i = 0; i < this.basePositions.length; i += 3) {
 			const x = this.basePositions[i];
