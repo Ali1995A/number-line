@@ -55,7 +55,10 @@ class Canvas2DImpl {
 	private valueA = 0;
 	private valueB = 0;
 	private dirty = true;
-	private points: Array<{ x: number; y: number; seed: number }> = [];
+	private points: Array<{ x: number; y: number }> = [];
+	private spacing = 14;
+	private cols = 1;
+	private rows = 1;
 
 	constructor(private host: HTMLElement, private beforeEl?: Element) {
 		this.canvas = makeCanvas();
@@ -127,17 +130,20 @@ class Canvas2DImpl {
 		const topPad = 14;
 		const areaTop = topPad;
 		const areaHeight = Math.max(60, this.height - bottomPad - topPad);
-		const area = this.width * areaHeight;
-		const count = clampInt(Math.round(area / 18000), 800, 2600);
 
-		const rand = mulberry32(hash32(`${this.width}x${this.height}`));
+		// regular lattice (no random scatter)
+		this.spacing = clampInt(Math.round(Math.min(this.width, areaHeight) / 30), 10, 18);
+		this.cols = Math.max(1, Math.floor(this.width / this.spacing));
+		this.rows = Math.max(1, Math.floor(areaHeight / this.spacing));
+
 		this.points = [];
-		for (let i = 0; i < count; i++) {
-			this.points.push({
-				x: rand() * this.width,
-				y: areaTop + rand() * areaHeight,
-				seed: rand(),
-			});
+		for (let row = 0; row < this.rows; row++) {
+			for (let col = 0; col < this.cols; col++) {
+				this.points.push({
+					x: (col + 0.5) * this.spacing,
+					y: areaTop + (row + 0.5) * this.spacing,
+				});
+			}
 		}
 	}
 
@@ -149,15 +155,15 @@ class Canvas2DImpl {
 		const areaTop = topPad;
 		const areaHeight = Math.max(60, this.height - bottomPad - topPad);
 
-		// 100x100循环：每 4 个 k 完成一次 10000 容量的点阵填满（这里只用于“粒子密度”）
+		// Fill ratio: per 4 k levels we complete one 10^4 cycle (100x100 concept)
 		const level = this.k === 0 ? 0 : Math.floor((this.k - 1) / 4);
 		const base = Math.pow(10, 4 * level);
-		const maxDots = Math.pow(10, this.k - 4 * level);
+		const cap = Math.pow(10, this.k - 4 * level); // 1/10/100/1000/10000
 
 		const ratioFor = (rawValue: number) => {
 			const absValue = Math.abs(Math.round(rawValue));
-			const filled = clampInt(Math.floor(absValue / base), 0, maxDots);
-			return maxDots <= 0 ? 0 : filled / maxDots;
+			const filled = clampInt(Math.floor(absValue / base), 0, cap);
+			return cap <= 0 ? 0 : filled / cap;
 		};
 
 		const regionFor = (ballX: number) => {
@@ -176,14 +182,30 @@ class Canvas2DImpl {
 			return `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
 		};
 
+		const inAreaY = (y: number) => y >= areaTop && y <= areaTop + areaHeight;
+		const localRank = (x: number, y: number, region: { start: number; end: number; w: number }, outwardFromMid: boolean) => {
+			const w = Math.max(1, region.w);
+			const localCols = Math.max(1, Math.floor(w / this.spacing));
+			const row = clampInt(Math.floor((y - areaTop) / this.spacing), 0, this.rows - 1);
+			let u = outwardFromMid ? (x - this.midX) / w : (this.midX - x) / w;
+			u = clamp(u, 0, 0.999999);
+			const col = clampInt(Math.floor(u * localCols), 0, localCols - 1);
+			return (row * localCols + col) / (this.rows * localCols);
+		};
+
 		for (const p of this.points) {
+			if (!inAreaY(p.y)) continue;
 			const inA = rA.w >= 24 && p.x >= rA.start && p.x <= rA.end;
 			const inB = rB.w >= 24 && p.x >= rB.start && p.x <= rB.end;
 			if (!inA && !inB) continue;
 
 			const useB = inB && (!inA || Math.abs(p.x - this.ballBx) < Math.abs(p.x - this.ballAx));
 			const ratio = useB ? ratioB : ratioA;
-			if (p.seed > ratio) continue; // no empty-dot wallpaper
+			const ballX = useB ? this.ballBx : this.ballAx;
+			const outward = ballX >= this.midX;
+			const region = useB ? rB : rA;
+			const rank = localRank(p.x, p.y, region, outward);
+			if (rank > ratio) continue; // no empty-dot wallpaper
 
 			const side = (useB ? this.valueB : this.valueA) >= 0 ? "pos" : "neg";
 
@@ -255,6 +277,9 @@ class WebGLPointsImpl {
 	private positions: Float32Array = new Float32Array(0);
 	private colors: Float32Array = new Float32Array(0);
 	private seeds: Float32Array = new Float32Array(0);
+	private spacing = 14;
+	private cols = 1;
+	private rows = 1;
 
 	constructor(private host: HTMLElement, private beforeEl?: Element) {
 		const canvas = makeCanvas();
@@ -386,8 +411,17 @@ class WebGLPointsImpl {
 			const useB = inB && (!inA || Math.abs(x0 - this.ballBx) < Math.abs(x0 - this.ballAx));
 			const ratio = useB ? ratioB : ratioA;
 			const seed = this.seeds[i / 3] || 0.5;
-			if (seed > ratio) {
-				// no "empty dot wallpaper"
+			const ballX = useB ? this.ballBx : this.ballAx;
+			const outward = ballX >= this.midX;
+			const region = useB ? rB : rA;
+			const regionW = Math.max(1, region.w);
+			const localCols = Math.max(1, Math.floor(regionW / this.spacing));
+			const row = clampInt(Math.floor((y0 - areaTop) / this.spacing), 0, this.rows - 1);
+			let u = outward ? (x0 - this.midX) / regionW : (this.midX - x0) / regionW;
+			u = clamp(u, 0, 0.999999);
+			const col = clampInt(Math.floor(u * localCols), 0, localCols - 1);
+			const rank = (row * localCols + col) / (this.rows * localCols);
+			if (rank > ratio) {
 				this.colors[i] = 0;
 				this.colors[i + 1] = 0;
 				this.colors[i + 2] = 0;
@@ -410,9 +444,9 @@ class WebGLPointsImpl {
 			}
 
 			// subtle drift so it reads as "particles", not a flat wallpaper
-			// subtle drift so it reads as "particles", not a flat wallpaper
-			const drift = Math.sin(time * 0.9 + seed * 9.0) * 0.9;
-			const jitter = (seed - 0.5) * 0.9;
+			// subtle drift so it reads as "particles", but keep lattice feel
+			const drift = Math.sin(time * 0.9 + seed * 9.0) * 0.35;
+			const jitter = (seed - 0.5) * 0.35;
 
 			this.positions[i] = x0 + jitter;
 			this.positions[i + 1] = y0 + wave * 7.5 + drift * 0.6;
@@ -434,29 +468,37 @@ class WebGLPointsImpl {
 		const topPad = 14;
 		const areaTop = topPad;
 		const areaHeight = Math.max(60, this.height - bottomPad - topPad);
-		const area = this.width * areaHeight;
-		const count = clampInt(Math.round(area / 16000), 1400, 5200);
+
+		// regular lattice (no random scatter)
+		this.spacing = clampInt(Math.round(Math.min(this.width, areaHeight) / 30), 10, 18);
+		this.cols = Math.max(1, Math.floor(this.width / this.spacing));
+		this.rows = Math.max(1, Math.floor(areaHeight / this.spacing));
+		const count = this.cols * this.rows;
 
 		this.basePositions = new Float32Array(count * 3);
 		this.positions = new Float32Array(count * 3);
 		this.colors = new Float32Array(count * 3);
 		this.seeds = new Float32Array(count);
 
-		const rand = mulberry32(hash32(`${this.width}x${this.height}`));
-		for (let p = 0; p < count; p++) {
-			const px = rand() * this.width;
-			const py = areaTop + rand() * areaHeight;
-			const i = p * 3;
-			this.basePositions[i] = px;
-			this.basePositions[i + 1] = py;
-			this.basePositions[i + 2] = 0;
-			this.positions[i] = px;
-			this.positions[i + 1] = py;
-			this.positions[i + 2] = 0;
-			this.colors[i] = 0;
-			this.colors[i + 1] = 0;
-			this.colors[i + 2] = 0;
-			this.seeds[p] = rand();
+		let p = 0;
+		for (let row = 0; row < this.rows; row++) {
+			for (let col = 0; col < this.cols; col++) {
+				const px = (col + 0.5) * this.spacing;
+				const py = areaTop + (row + 0.5) * this.spacing;
+				const i = p * 3;
+				this.basePositions[i] = px;
+				this.basePositions[i + 1] = py;
+				this.basePositions[i + 2] = 0;
+				this.positions[i] = px;
+				this.positions[i + 1] = py;
+				this.positions[i + 2] = 0;
+				this.colors[i] = 0;
+				this.colors[i + 1] = 0;
+				this.colors[i + 2] = 0;
+				// deterministic seed from lattice index (0..1), used only for micro drift
+				this.seeds[p] = count <= 1 ? 0.5 : p / (count - 1);
+				p++;
+			}
 		}
 
 		const geom = new THREE.BufferGeometry();
