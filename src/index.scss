@@ -4,12 +4,13 @@
 
 :root {
 	/* Pink iOS-ish palette */
-	--nl-pink: 236 72 153; /* pink-500 */
-	--nl-pink-dark: 219 39 119; /* pink-600 */
-	--nl-violet: 139 92 246; /* violet-500 */
-	--nl-rose-bg: 255 241 242; /* rose-50 */
-	--nl-surface: 255 255 255;
-	--nl-border: 244 114 182; /* pink-400-ish */
+	/* Use comma-separated RGB to keep rgba(var(--x), a) compatible with iOS Safari. */
+	--nl-pink: 236, 72, 153; /* pink-500 */
+	--nl-pink-dark: 219, 39, 119; /* pink-600 */
+	--nl-violet: 139, 92, 246; /* violet-500 */
+	--nl-rose-bg: 255, 241, 242; /* rose-50 */
+	--nl-surface: 255, 255, 255;
+	--nl-border: 244, 114, 182; /* pink-400-ish */
 	--nl-axis-h: clamp(260px, 46vh, 440px);
 }
 
@@ -19,7 +20,7 @@
 
 .nl-container {
 	width: 100%;
-	max-width: 64rem; /* ~= max-w-5xl */
+	max-width: none;
 	margin-left: auto;
 	margin-right: auto;
 	padding-left: calc(16px + env(safe-area-inset-left));
@@ -31,7 +32,8 @@
 	user-select: none;
 	-webkit-user-select: none;
 	-webkit-touch-callout: none;
-	height: var(--nl-axis-h);
+	height: auto;
+	min-height: var(--nl-axis-h);
 }
 
 @layer base {
@@ -61,6 +63,7 @@
 
 	.nl-axis-card {
 		@apply flex flex-col;
+		flex: 1 1 auto;
 		min-height: 0;
 	}
 
@@ -153,13 +156,12 @@
 @media (min-width: 768px) and (orientation: landscape) {
 	:root {
 		/* iPad 横屏：交互区尽量大 */
-		--nl-axis-h: clamp(420px, 68vh, 720px);
+		--nl-axis-h: clamp(520px, 80vh, 980px);
 	}
 
 	.nl-container {
-		max-width: none;
-		padding-left: calc(18px + env(safe-area-inset-left));
-		padding-right: calc(18px + env(safe-area-inset-right));
+		padding-left: calc(12px + env(safe-area-inset-left));
+		padding-right: calc(12px + env(safe-area-inset-right));
 	}
 
 	.nl-main {

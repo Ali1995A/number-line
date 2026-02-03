@@ -8,7 +8,7 @@ import {
 	pow10BigInt,
 } from "./ladder/format";
 import { DiscreteStepper } from "./ladder/stepper";
-import { ParticleRipples } from "./ladder/particles";
+import { ParticleBlocks } from "./ladder/particles";
 
 type State = {
 	k: number;
@@ -39,7 +39,7 @@ const segIndependent = mustGetEl("#seg-independent") as HTMLButtonElement;
 
 let engine: LadderEngine | null = null;
 const layers = ensureAxisLayers(axis);
-const particles = new ParticleRipples(axis, layers.overlay);
+const particles = new ParticleBlocks(axis, layers.overlay);
 
 const state: State = {
 	k: 0,
@@ -134,11 +134,10 @@ function render() {
 
 	layers.bg.innerHTML = "";
 	layers.overlay.innerHTML = "";
-	layers.bg.appendChild(renderAxisBackground(engine.width));
 	layers.overlay.appendChild(renderCenterZero(engine.width));
 
 	const ball = computeBallPositions(engine);
-	particles.setMask({
+	particles.set({
 		width: engine.width,
 		height,
 		k: state.k,
@@ -193,24 +192,6 @@ function formatValueBanner(): string {
 	const b = formatValue(state.valueB, state.fullNumber, state.k);
 	if (state.symmetric) return `当前值：${a}（对称：${b}）`;
 	return `A：${a}　B：${b}`;
-}
-
-function renderAxisBackground(width: number): HTMLElement {
-	const bg = document.createElement("div");
-	bg.className = "absolute inset-0";
-
-	const left = document.createElement("div");
-	left.className = "absolute inset-y-0 left-0";
-	left.style.width = `${width / 2}px`;
-	left.style.background = "rgba(139, 92, 246, 0.07)"; // violet (negative)
-
-	const right = document.createElement("div");
-	right.className = "absolute inset-y-0 right-0";
-	right.style.width = `${width / 2}px`;
-	right.style.background = "rgba(236, 72, 153, 0.07)"; // pink (positive)
-
-	bg.append(left, right);
-	return bg;
 }
 
 function renderCenterZero(width: number): HTMLElement {
