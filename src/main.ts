@@ -151,19 +151,25 @@ function render() {
 	});
 
 	const vm = engine.numberLine.buildViewModel(engine.width);
-	for (const t of vm.tickMarks) {
-		layers.overlay.appendChild(
-			renderTick(t.position, classifyTickHeight(t.height, engine.numberLine.biggestTickPatternValue)),
-		);
-	}
-
 	const labelsOpacity = ball.labelsOpacity;
 	if (transition) {
-		// crossfade labels between two k levels for a smoother "梯级变化"感受
+		// Cross-zoom: scale + crossfade tick/label layers so the ruler feels “infinite”.
 		const fromVm = transition.fromEngine.numberLine.buildViewModel(transition.fromEngine.width);
-		renderTickLabels(fromVm, labelsOpacity.from, transition.fromK);
+		const deltaK = transition.toK - transition.fromK;
+		const s = Math.pow(0.72, deltaK);
+		const ease = ball.ease;
+		const fromScale = Math.pow(s, ease);
+		const toScale = Math.pow(s, -(1 - ease));
+
+		layers.overlay.appendChild(
+			renderRulerLayer(fromVm, transition.fromEngine.numberLine.biggestTickPatternValue, labelsOpacity.from, transition.fromK, fromScale),
+		);
+		layers.overlay.appendChild(
+			renderRulerLayer(vm, engine.numberLine.biggestTickPatternValue, labelsOpacity.to, state.k, toScale),
+		);
+	} else {
+		layers.overlay.appendChild(renderRulerLayer(vm, engine.numberLine.biggestTickPatternValue, 1, state.k, 1));
 	}
-	renderTickLabels(vm, labelsOpacity.to, state.k);
 
 	const { xA, xB } = ball;
 	layers.overlay.appendChild(renderValueFollower(xA, formatValue(state.valueA, state.fullNumber, state.k), "a", engine.width));
@@ -298,16 +304,29 @@ function renderTickLabel(x: number, label: string, opacity = 1): HTMLElement {
 	return el;
 }
 
-function renderTickLabels(
-	viewModel: { tickMarks: Array<{ label: string | null; position: number; value: number }> },
+function renderRulerLayer(
+	viewModel: { tickMarks: Array<{ label: string | null; position: number; height: number; value: number }> },
+	biggestTick: number,
 	opacity: number,
 	kForLabels: number,
+	scaleX: number,
 ) {
-	if (opacity <= 0) return;
+	const layer = document.createElement("div");
+	layer.className = "absolute inset-0";
+	layer.style.pointerEvents = "none";
+	layer.style.opacity = String(opacity);
+	layer.style.transformOrigin = "50% 86%";
+	const scaleY = 1 + (scaleX - 1) * 0.32;
+	layer.style.transform = `scale(${scaleX}, ${scaleY})`;
+	layer.style.willChange = "transform, opacity";
+
 	for (const t of viewModel.tickMarks) {
-		if (t.label == null) continue;
-		layers.overlay.appendChild(renderTickLabel(t.position, formatValue(t.value, state.fullNumber, kForLabels), opacity));
+		layer.appendChild(renderTick(t.position, classifyTickHeight(t.height, biggestTick)));
+		if (t.label != null) {
+			layer.appendChild(renderTickLabel(t.position, formatValue(t.value, state.fullNumber, kForLabels), opacity));
+		}
 	}
+	return layer;
 }
 
 function renderBall(x: number, which: "a" | "b", fromOpacity: number, toOpacity: number): HTMLElement {
@@ -665,6 +684,7 @@ function computeBallPositions(eng: LadderEngine) {
 			xA: valueToXWithEngine(state.valueA, eng),
 			xB: valueToXWithEngine(state.valueB, eng),
 			labelsOpacity: { from: 0, to: 1 },
+			ease: 1,
 		};
 	}
 	const now = performance.now();
@@ -686,6 +706,7 @@ function computeBallPositions(eng: LadderEngine) {
 		xA,
 		xB,
 		labelsOpacity: { from: 1 - ease, to: ease },
+		ease,
 	};
 }
 

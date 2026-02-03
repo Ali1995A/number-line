@@ -256,7 +256,9 @@ export class ParticleBlocks {
 		// Map k to a gentle visual zoom so each discrete k±1 feels “alive”.
 		// Larger k -> slightly tighter (zoomed-out) particle field.
 		const scaleFor = (k: number) => Math.pow(10, -k * 0.035);
-		const fieldScale = scaleFor(kAnimated);
+		const prog = this.kAnimStart > 0 ? clamp((nowMs - this.kAnimStart) / this.kAnimDurMs, 0, 1) : 1;
+		const pulse = 1 + 0.10 * Math.sin(Math.PI * prog);
+		const fieldScale = scaleFor(kAnimated) * pulse;
 
 		// Apply smooth zoom to the whole particle field around the center.
 		const midX = this.params.midX;
