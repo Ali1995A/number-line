@@ -39,7 +39,7 @@ const segIndependent = mustGetEl("#seg-independent") as HTMLButtonElement;
 
 let engine: LadderEngine | null = null;
 const layers = ensureAxisLayers(axis);
-const particles = new ParticleBlocks(axis, layers.mask);
+const particles = new ParticleBlocks(axis, layers.overlay);
 
 const state: State = {
 	k: 0,
@@ -133,12 +133,10 @@ function render() {
 	currentValueEl.textContent = formatValueBanner();
 
 	layers.bg.innerHTML = "";
-	layers.mask.innerHTML = "";
 	layers.overlay.innerHTML = "";
 	layers.overlay.appendChild(renderCenterZero(engine.width));
 
 	const ball = computeBallPositions(engine);
-	layers.mask.appendChild(renderCurtainMask(engine.width, ball.xA, ball.xB));
 	particles.set({
 		width: engine.width,
 		height,
@@ -169,11 +167,11 @@ function render() {
 		layers.overlay.appendChild(
 			renderRulerLayer(vm, engine.numberLine.biggestTickPatternValue, labelsOpacity.to, state.k, toScale),
 		);
-		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, labelsOpacity.from, fromScale));
-		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, labelsOpacity.to, toScale));
+		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, labelsOpacity.from, transition.fromK, fromScale));
+		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, labelsOpacity.to, state.k, toScale));
 	} else {
 		layers.overlay.appendChild(renderRulerLayer(vm, engine.numberLine.biggestTickPatternValue, 1, state.k, 1));
-		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, 1, 1));
+		layers.overlay.appendChild(renderVerticalRulerLayer(engine.width / 2, height, 1, state.k, 1));
 	}
 
 	const { xA, xB } = ball;
@@ -241,47 +239,6 @@ function renderCenterZero(width: number): HTMLElement {
 	return wrap;
 }
 
-function renderCurtainMask(width: number, xA: number, xB: number): HTMLElement {
-	const mid = width / 2;
-	const leftMost = Math.min(mid, xA, xB);
-	const rightMost = Math.max(mid, xA, xB);
-
-	// Reveal expands from 0 outward. Everything beyond the furthest ball on that side stays covered.
-	const leftCoverW = clamp(leftMost, 0, mid);
-	const rightCoverX = clamp(rightMost, mid, width);
-
-	const wrap = document.createElement("div");
-	wrap.className = "absolute inset-0";
-
-	const left = document.createElement("div");
-	left.className = "absolute inset-y-0 left-0";
-	left.style.width = `${leftCoverW}px`;
-	left.style.background =
-		"linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,241,242,0.82))";
-	left.style.backdropFilter = "blur(6px)";
-	left.style.borderRight = "1px solid rgba(244,114,182,0.18)";
-
-	const right = document.createElement("div");
-	right.className = "absolute inset-y-0";
-	right.style.left = `${rightCoverX}px`;
-	right.style.right = "0px";
-	right.style.background =
-		"linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,241,242,0.82))";
-	right.style.backdropFilter = "blur(6px)";
-	right.style.borderLeft = "1px solid rgba(244,114,182,0.18)";
-
-	// Soft edge at center (so “拉开”感觉更像窗帘)
-	const seam = document.createElement("div");
-	seam.className = "absolute inset-y-0";
-	seam.style.left = `${mid - 1}px`;
-	seam.style.width = "2px";
-	seam.style.background =
-		"linear-gradient(180deg, rgba(244,114,182,0.18), rgba(139,92,246,0.14))";
-
-	wrap.append(left, right, seam);
-	return wrap;
-}
-
 function renderTick(x: number, heightClass: "tall" | "mid" | "short"): HTMLElement {
 	const tick = document.createElement("div");
 	tick.className = "absolute bottom-10 w-px bg-slate-700/70";
@@ -334,7 +291,7 @@ function renderRulerLayer(
 	return layer;
 }
 
-function renderVerticalRulerLayer(midX: number, height: number, opacity: number, scale: number) {
+function renderVerticalRulerLayer(midX: number, height: number, opacity: number, kForLabels: number, scale: number) {
 	const layer = document.createElement("div");
 	layer.className = "absolute inset-0";
 	layer.style.pointerEvents = "none";
@@ -350,22 +307,41 @@ function renderVerticalRulerLayer(midX: number, height: number, opacity: number,
 	line.style.background = "rgba(15, 23, 42, 0.10)";
 	layer.appendChild(line);
 
-	// Tick ladder: subtle, symmetric, no numbers (just to sell “infinite canvas”)
+	// Tick ladder: symmetric with labels matching horizontal formatting.
 	const midY = height / 2;
-	const step = 28;
-	const maxN = Math.ceil(height / step);
-	for (let i = -maxN; i <= maxN; i++) {
-		const y = midY + i * step;
-		if (y < 0 || y > height) continue;
-		const isMajor = i % 5 === 0;
+	const topPad = 52;
+	const bottomPad = 92;
+	const usable = Math.max(120, height - topPad - bottomPad);
+	const span = usable * 0.40;
+
+	const max = kForLabels === 0 ? 1 : Math.pow(10, kForLabels);
+	const half = max / 2;
+
+	const marks: Array<{ v: number; y: number; major: boolean; label: string }> = [
+		{ v: max, y: midY - span, major: true, label: formatValue(max, state.fullNumber, kForLabels) },
+		{ v: half, y: midY - span / 2, major: false, label: formatValue(half, state.fullNumber, kForLabels) },
+		{ v: 0, y: midY, major: true, label: "0" },
+		{ v: -half, y: midY + span / 2, major: false, label: formatValue(-half, state.fullNumber, kForLabels) },
+		{ v: -max, y: midY + span, major: true, label: formatValue(-max, state.fullNumber, kForLabels) },
+	];
+
+	for (const m of marks) {
 		const tick = document.createElement("div");
 		tick.className = "absolute h-px";
 		tick.style.left = `${midX}px`;
-		tick.style.top = `${y}px`;
-		tick.style.width = isMajor ? "22px" : "12px";
+		tick.style.top = `${clamp(m.y, 8, height - 8)}px`;
+		tick.style.width = m.major ? "28px" : "18px";
 		tick.style.transform = "translateX(-50%)";
-		tick.style.background = isMajor ? "rgba(15, 23, 42, 0.16)" : "rgba(15, 23, 42, 0.10)";
+		tick.style.background = m.major ? "rgba(15, 23, 42, 0.18)" : "rgba(15, 23, 42, 0.12)";
 		layer.appendChild(tick);
+
+		const label = document.createElement("div");
+		label.className = "absolute -translate-y-1/2 whitespace-nowrap rounded-md bg-white/70 px-1.5 py-0.5 text-xs text-slate-700 backdrop-blur";
+		label.style.left = `${midX + 18}px`;
+		label.style.top = `${clamp(m.y, 8, height - 8)}px`;
+		label.style.opacity = String(opacity);
+		label.textContent = m.label;
+		layer.appendChild(label);
 	}
 
 	return layer;
@@ -525,6 +501,29 @@ let lastRippleAt = 0;
 let lastRippleX = 0;
 let lastRippleY = 0;
 
+function applyValueAtClientPoint(clientX: number, clientY: number) {
+	if (!engine) return;
+	const rect = axis.getBoundingClientRect();
+	const x = clamp(clientX - rect.left, 0, rect.width);
+	const value = engine.numberLine.valueAt(x);
+	const chosen = draggingBall ?? pickNearestBall(clientX);
+	if (chosen === "b") {
+		if (state.symmetric) state.valueA = clamp(-value, -engine.maxAbsValue, engine.maxAbsValue);
+		else state.valueB = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
+	} else {
+		state.valueA = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
+	}
+	if (state.symmetric) state.valueB = -state.valueA;
+
+	// ripple (throttled by movement during dragging; always emit on tap)
+	const now = performance.now();
+	lastRippleAt = now;
+	lastRippleX = x;
+	lastRippleY = clamp(clientY - rect.top, 0, rect.height);
+	particles.addRipple(lastRippleX, lastRippleY);
+	render();
+}
+
 axis.addEventListener("pointerdown", (e) => {
 	if (pinching) return;
 	dragging = true;
@@ -533,12 +532,8 @@ axis.addEventListener("pointerdown", (e) => {
 	draggingBall = attr ?? pickNearestBall(e.clientX);
 	axis.setPointerCapture(e.pointerId);
 
-	// ripple at touch point + symmetric ripple
-	const rect = axis.getBoundingClientRect();
-	lastRippleAt = performance.now();
-	lastRippleX = clamp(e.clientX - rect.left, 0, rect.width);
-	lastRippleY = clamp(e.clientY - rect.top, 0, rect.height);
-	particles.addRipple(lastRippleX, lastRippleY);
+	// Tap anywhere: value follows finger/mouse immediately + ripple.
+	applyValueAtClientPoint(e.clientX, e.clientY);
 });
 
 axis.addEventListener("pointermove", (e) => {
@@ -551,7 +546,6 @@ axis.addEventListener("pointermove", (e) => {
 		if (state.symmetric) state.valueA = clamp(-value, -engine.maxAbsValue, engine.maxAbsValue);
 		else state.valueB = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
 	} else {
-		// default drag A
 		state.valueA = clamp(value, -engine.maxAbsValue, engine.maxAbsValue);
 	}
 	if (state.symmetric) state.valueB = -state.valueA;
@@ -589,11 +583,8 @@ axis.addEventListener(
 			pinching = false;
 			touchDragging = true;
 			touchDragId = e.touches[0].identifier;
-			const rect = axis.getBoundingClientRect();
-			lastRippleAt = performance.now();
-			lastRippleX = clamp(e.touches[0].clientX - rect.left, 0, rect.width);
-			lastRippleY = clamp(e.touches[0].clientY - rect.top, 0, rect.height);
-			particles.addRipple(lastRippleX, lastRippleY);
+			draggingBall = pickNearestBall(e.touches[0].clientX);
+			applyValueAtClientPoint(e.touches[0].clientX, e.touches[0].clientY);
 		} else if (e.touches.length === 2) {
 			pinching = true;
 			dragging = false;
@@ -679,9 +670,8 @@ function touchDistance(a: Touch, b: Touch) {
 
 function ensureAxisLayers(host: HTMLElement) {
 	let bg = host.querySelector<HTMLElement>("[data-nl-bg]");
-	let mask = host.querySelector<HTMLElement>("[data-nl-mask]");
 	let overlay = host.querySelector<HTMLElement>("[data-nl-overlay]");
-	if (bg && mask && overlay) return { bg, mask, overlay };
+	if (bg && overlay) return { bg, overlay };
 
 	bg = document.createElement("div");
 	bg.dataset.nlBg = "1";
@@ -690,25 +680,17 @@ function ensureAxisLayers(host: HTMLElement) {
 	bg.style.pointerEvents = "none";
 	bg.style.zIndex = "0";
 
-	mask = document.createElement("div");
-	mask.dataset.nlMask = "1";
-	mask.style.position = "absolute";
-	mask.style.inset = "0";
-	mask.style.pointerEvents = "none";
-	mask.style.zIndex = "2";
-
 	overlay = document.createElement("div");
 	overlay.dataset.nlOverlay = "1";
 	overlay.style.position = "absolute";
 	overlay.style.inset = "0";
 	overlay.style.pointerEvents = "auto";
-	overlay.style.zIndex = "3";
+	overlay.style.zIndex = "2";
 
-	// ensure order: bg (0) -> particles canvas (1) -> mask (2) -> overlay (3)
+	// ensure order: bg (0) -> particles canvas (1) -> overlay (2)
 	host.appendChild(bg);
-	host.appendChild(mask);
 	host.appendChild(overlay);
-	return { bg, mask, overlay };
+	return { bg, overlay };
 }
 
 function pickNearestBall(clientX: number): "a" | "b" {
