@@ -89,8 +89,16 @@ export class ParticleBlocks {
 	private rippleSpeedPx = 520; // px/s
 	private rippleBandPx = 140; // thickness of the main ring
 	private rippleDecay = 0.75; // time decay
+	private perf = {
+		lowEnd: false,
+		maxPixelRatio: 2,
+		rippleMaxCells: 120,
+		rippleStride: 1,
+		activeRippleMax: 4000,
+	};
 
 	constructor(private host: HTMLElement, private beforeEl?: Element) {
+		this.perf = detectPerf();
 		this.canvas = document.createElement("canvas");
 		this.canvas.className = "nl-particles";
 		this.canvas.style.position = "absolute";
@@ -107,11 +115,11 @@ export class ParticleBlocks {
 		this.renderer = new THREE.WebGLRenderer({
 			canvas: this.canvas,
 			alpha: true,
-			antialias: true,
+			antialias: !this.perf.lowEnd,
 			powerPreference: "low-power",
 		});
 		this.renderer.setClearColor(0x000000, 0);
-		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.perf.maxPixelRatio));
 		// Make colors pop correctly on iPad/Safari (sRGB output).
 		this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
@@ -411,6 +419,8 @@ export class ParticleBlocks {
 			posCount: number,
 		) => {
 			if (!hasRipples) return;
+			// On low-end iPad, avoid per-instance updates for huge active counts.
+			if (this.perf.lowEnd && (negCount + posCount) > this.perf.activeRippleMax) return;
 			const tmp = new THREE.Object3D();
 
 			for (let i = 0; i < negCount; i++) {
@@ -650,7 +660,11 @@ export class ParticleBlocks {
 			const radius = this.rippleSpeedPx * dt;
 			const band = this.rippleBandPx;
 			const maxRange = radius + band;
-			const radiusCells = clampInt(Math.ceil((maxRange / Math.max(1e-3, fieldScale)) / cell) + 2, 6, 120);
+			const radiusCells = clampInt(
+				Math.ceil((maxRange / Math.max(1e-3, fieldScale)) / cell) + 2,
+				6,
+				this.perf.rippleMaxCells,
+			);
 
 			// Convert ripple center to local coords (relative center) for index estimation.
 			const lx = (r.x - midX) / Math.max(1e-3, fieldScale);
@@ -667,14 +681,22 @@ export class ParticleBlocks {
 			const rowMin = clampInt(rowCenter - radiusCells, 0, 99);
 			const rowMax = clampInt(rowCenter + radiusCells, 0, 99);
 
+			const stride = this.perf.rippleStride;
+			const band2 = band * 2.2;
 			if (side === "neg") {
-				for (let row = rowMin; row <= rowMax; row++) {
-					for (let col = colMin; col <= colMax; col++) {
+				for (let row = rowMin; row <= rowMax; row += stride) {
+					for (let col = colMin; col <= colMax; col += stride) {
 						const idx = row * 100 + col;
 						// Only deform the current wavefront band (keeps perf good as it expands).
 						const b = this.negBases[idx];
-						const d = Math.hypot(midX + b.x * fieldScale - r.x, midY + b.y * fieldScale - r.y);
-						if (Math.abs(d - radius) > band * 2.2) continue;
+						const dx = midX + b.x * fieldScale - r.x;
+						const dy = midY + b.y * fieldScale - r.y;
+						const d2 = dx * dx + dy * dy;
+						const rMin = radius - band2;
+						const rMax = radius + band2;
+						const rMin2 = rMin * rMin;
+						const rMax2 = rMax * rMax;
+						if (d2 < rMin2 || d2 > rMax2) continue;
 						if (this.dirtyNegMark[idx] === 0) {
 							this.dirtyNegMark[idx] = 1;
 							this.dirtyNeg[this.dirtyNegLen++] = idx;
@@ -684,12 +706,18 @@ export class ParticleBlocks {
 				}
 				field.negBase.instanceMatrix.needsUpdate = true;
 			} else {
-				for (let row = rowMin; row <= rowMax; row++) {
-					for (let col = colMin; col <= colMax; col++) {
+				for (let row = rowMin; row <= rowMax; row += stride) {
+					for (let col = colMin; col <= colMax; col += stride) {
 						const idx = row * 100 + col;
 						const b = this.posBases[idx];
-						const d = Math.hypot(midX + b.x * fieldScale - r.x, midY + b.y * fieldScale - r.y);
-						if (Math.abs(d - radius) > band * 2.2) continue;
+						const dx = midX + b.x * fieldScale - r.x;
+						const dy = midY + b.y * fieldScale - r.y;
+						const d2 = dx * dx + dy * dy;
+						const rMin = radius - band2;
+						const rMax = radius + band2;
+						const rMin2 = rMin * rMin;
+						const rMax2 = rMax * rMax;
+						if (d2 < rMin2 || d2 > rMax2) continue;
 						if (this.dirtyPosMark[idx] === 0) {
 							this.dirtyPosMark[idx] = 1;
 							this.dirtyPos[this.dirtyPosLen++] = idx;
@@ -721,6 +749,23 @@ function clamp(v: number, lo: number, hi: number) {
 
 function clampInt(v: number, lo: number, hi: number) {
 	return Math.min(Math.max(v, lo), hi);
+}
+
+function detectPerf() {
+	const ua = (navigator.userAgent || "").toLowerCase();
+	const isIPad = ua.includes("ipad") || (ua.includes("macintosh") && "ontouchend" in document);
+	const cores = (navigator as any).hardwareConcurrency || 4;
+	const lowEnd = isIPad && cores <= 2;
+	return {
+		lowEnd,
+		// iPad Pro 1st gen (A9X) benefits hugely from lower pixel ratio.
+		maxPixelRatio: lowEnd ? 1 : 1.5,
+		// Limit ripple deformation window size and sampling density.
+		rippleMaxCells: lowEnd ? 70 : 110,
+		rippleStride: lowEnd ? 2 : 1,
+		// Skip per-instance active ripple when the active set is huge.
+		activeRippleMax: lowEnd ? 1600 : 4000,
+	};
 }
 
 function makeRoundedAlphaTexture() {
