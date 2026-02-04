@@ -84,6 +84,7 @@ export class ParticleBlocks {
 	private dirtyPosLen = 0;
 	private dirtyNegMark = new Uint8Array(10000);
 	private dirtyPosMark = new Uint8Array(10000);
+	private lastRippleDeformMs = 0;
 
 	// Ripple model (traveling wavefront).
 	private rippleSpeedPx = 520; // px/s
@@ -380,6 +381,7 @@ export class ParticleBlocks {
 					tmp.scale.set(b.s, b.s, 1);
 					tmp.updateMatrix();
 					f.negBase.setMatrixAt(idx, tmp.matrix);
+					f.negActive.setMatrixAt(idx, tmp.matrix);
 				}
 				for (let i = 0; i < this.dirtyPosLen; i++) {
 					const idx = this.dirtyPos[i];
@@ -388,9 +390,12 @@ export class ParticleBlocks {
 					tmp.scale.set(b.s, b.s, 1);
 					tmp.updateMatrix();
 					f.posBase.setMatrixAt(idx, tmp.matrix);
+					f.posActive.setMatrixAt(idx, tmp.matrix);
 				}
 				f.negBase.instanceMatrix.needsUpdate = true;
 				f.posBase.instanceMatrix.needsUpdate = true;
+				f.negActive.instanceMatrix.needsUpdate = true;
+				f.posActive.instanceMatrix.needsUpdate = true;
 			}
 
 			this.dirtyNegMark.fill(0);
@@ -431,6 +436,104 @@ export class ParticleBlocks {
 			if (this.perf.lowEnd && (negCount + posCount) > this.perf.activeRippleMax) return;
 			const tmp = new THREE.Object3D();
 
+			// Low-end: only update a local window around the wavefront (not all active instances).
+			if (this.perf.lowEnd && this.layoutMeta) {
+				const now = performance.now();
+				if (now - this.lastRippleDeformMs < 34) return; // ~30fps ripple deformation on low-end
+				this.lastRippleDeformMs = now;
+
+				const midX = this.params?.midX ?? this.width / 2;
+				const midY = this.height * 0.5;
+				const { cell, padAxis, oy } = this.layoutMeta;
+				const y0 = this.height * 0.5 - oy;
+
+				const deform = (
+					idx: number,
+					base: { x: number; y: number; s: number },
+					mesh: THREE.InstancedMesh,
+				) => {
+					const w = waveAt(midX + base.x * scale, midY + base.y * scale);
+					const s = base.s * (1 + clamp(w, -0.70, 1.05));
+					tmp.position.set(base.x, base.y, 0);
+					tmp.scale.set(s, s, 1);
+					tmp.updateMatrix();
+					mesh.setMatrixAt(idx, tmp.matrix);
+				};
+
+				for (const r of this.ripples) {
+					const dt = time - r.start;
+					if (dt < 0) continue;
+					const radius = this.rippleSpeedPx * dt;
+					const band = this.rippleBandPx;
+					const maxRange = radius + band;
+					const radiusCells = clampInt(
+						Math.ceil((maxRange / Math.max(1e-3, scale)) / cell) + 2,
+						6,
+						this.perf.rippleMaxCells,
+					);
+
+					const lx = (r.x - midX) / Math.max(1e-3, scale);
+					const ly = (r.y - midY) / Math.max(1e-3, scale);
+					const side = lx >= 0 ? "pos" : "neg";
+					const ax = Math.abs(lx);
+					const colCenter = clampInt(Math.floor((ax - padAxis) / cell), 0, 99);
+					const rowCenter = clampInt(Math.floor((y0 - ly) / cell), 0, 99);
+					const colMin = clampInt(colCenter - radiusCells, 0, 99);
+					const colMax = clampInt(colCenter + radiusCells, 0, 99);
+					const rowMin = clampInt(rowCenter - radiusCells, 0, 99);
+					const rowMax = clampInt(rowCenter + radiusCells, 0, 99);
+
+					const stride = this.perf.rippleStride;
+					const band2 = band * 2.2;
+					if (side === "neg") {
+						for (let row = rowMin; row <= rowMax; row += stride) {
+							for (let col = colMin; col <= colMax; col += stride) {
+								const idx = row * 100 + col;
+								if (idx >= negCount) continue;
+								const b = this.negBases[idx];
+								const dx = midX + b.x * scale - r.x;
+								const dy = midY + b.y * scale - r.y;
+								const d2 = dx * dx + dy * dy;
+								const rMin = radius - band2;
+								const rMax = radius + band2;
+								const rMin2 = rMin * rMin;
+								const rMax2 = rMax * rMax;
+								if (d2 < rMin2 || d2 > rMax2) continue;
+								if (this.dirtyNegMark[idx] === 0) {
+									this.dirtyNegMark[idx] = 1;
+									this.dirtyNeg[this.dirtyNegLen++] = idx;
+								}
+								deform(idx, b, field.negActive);
+							}
+						}
+						field.negActive.instanceMatrix.needsUpdate = true;
+					} else {
+						for (let row = rowMin; row <= rowMax; row += stride) {
+							for (let col = colMin; col <= colMax; col += stride) {
+								const idx = row * 100 + col;
+								if (idx >= posCount) continue;
+								const b = this.posBases[idx];
+								const dx = midX + b.x * scale - r.x;
+								const dy = midY + b.y * scale - r.y;
+								const d2 = dx * dx + dy * dy;
+								const rMin = radius - band2;
+								const rMax = radius + band2;
+								const rMin2 = rMin * rMin;
+								const rMax2 = rMax * rMax;
+								if (d2 < rMin2 || d2 > rMax2) continue;
+								if (this.dirtyPosMark[idx] === 0) {
+									this.dirtyPosMark[idx] = 1;
+									this.dirtyPos[this.dirtyPosLen++] = idx;
+								}
+								deform(idx, b, field.posActive);
+							}
+						}
+						field.posActive.instanceMatrix.needsUpdate = true;
+					}
+				}
+				return;
+			}
+
 			for (let i = 0; i < negCount; i++) {
 				const b = this.negBases[i];
 				const w = waveAt(midX + b.x * scale, midY + b.y * scale);
@@ -439,6 +542,10 @@ export class ParticleBlocks {
 				tmp.scale.set(s, s, 1);
 				tmp.updateMatrix();
 				field.negActive.setMatrixAt(i, tmp.matrix);
+				if (this.dirtyNegMark[i] === 0) {
+					this.dirtyNegMark[i] = 1;
+					this.dirtyNeg[this.dirtyNegLen++] = i;
+				}
 			}
 			field.negActive.instanceMatrix.needsUpdate = true;
 
@@ -450,6 +557,10 @@ export class ParticleBlocks {
 				tmp.scale.set(s, s, 1);
 				tmp.updateMatrix();
 				field.posActive.setMatrixAt(i, tmp.matrix);
+				if (this.dirtyPosMark[i] === 0) {
+					this.dirtyPosMark[i] = 1;
+					this.dirtyPos[this.dirtyPosLen++] = i;
+				}
 			}
 			field.posActive.instanceMatrix.needsUpdate = true;
 		};
@@ -796,8 +907,8 @@ function detectPerf() {
 		// iPad Pro 1st gen (A9X) benefits hugely from lower pixel ratio.
 		maxPixelRatio: lowEnd ? 1 : 1.5,
 		// Limit ripple deformation window size and sampling density.
-		rippleMaxCells: lowEnd ? 46 : 110,
-		rippleStride: lowEnd ? 3 : 1,
+		rippleMaxCells: lowEnd ? 40 : 110,
+		rippleStride: lowEnd ? 4 : 1,
 		// Skip per-instance active ripple when the active set is huge.
 		activeRippleMax: lowEnd ? 900 : 4000,
 	};

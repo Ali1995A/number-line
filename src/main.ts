@@ -538,6 +538,10 @@ let touchDragging = false;
 let touchDragId: number | null = null;
 let touchMoved = false;
 let pinchEver = false;
+let touchStartAt = 0;
+let touchStartX = 0;
+let touchStartY = 0;
+let pinchArmUntil = 0;
 let lastTouchX = 0;
 let lastTouchY = 0;
 axis.addEventListener(
@@ -551,6 +555,12 @@ axis.addEventListener(
 			draggingBall = pickNearestBall(e.touches[0].clientX);
 			lastTouchX = e.touches[0].clientX;
 			lastTouchY = e.touches[0].clientY;
+			touchStartAt = performance.now();
+			touchStartX = lastTouchX;
+			touchStartY = lastTouchY;
+			// Small grace window to allow the second finger to land for a pinch without generating a ripple.
+			// (This is the main reason “sometimes pinch still makes a ripple”.)
+			pinchArmUntil = touchStartAt + 180;
 			// Immediate follow (NO ripple yet). This prevents a ripple when the user is starting a pinch
 			// (the first finger would otherwise create one before the second finger lands).
 			applyValueAtClientPoint(lastTouchX, lastTouchY, { emitRipple: false });
@@ -558,6 +568,7 @@ axis.addEventListener(
 			e.preventDefault();
 			pinching = true;
 			pinchEver = true;
+			pinchArmUntil = 0;
 			dragging = false;
 			touchDragging = false;
 			touchDragId = null;
@@ -592,8 +603,18 @@ axis.addEventListener(
 			const now = performance.now();
 			const dt = now - lastRippleAt;
 			const dist = Math.hypot(x - lastRippleX, y - lastRippleY);
+			const armDist = Math.hypot(t.clientX - touchStartX, t.clientY - touchStartY);
+			// During the pinch-arm window, update the value but do not create ripples unless the user
+			// clearly starts a one-finger drag.
+			const inArm = !pinchEver && pinchArmUntil > 0 && now < pinchArmUntil;
 			if (!touchMoved) {
-				// First movement: immediate visible feedback.
+				// First movement: visible feedback, unless we are still arming for pinch.
+				if (inArm && armDist < 18) {
+					lastTouchX = t.clientX;
+					lastTouchY = t.clientY;
+					requestRender();
+					return;
+				}
 				touchMoved = true;
 				lastRippleAt = now;
 				lastRippleX = x;
@@ -614,6 +635,7 @@ axis.addEventListener(
 		e.preventDefault();
 		pinching = true;
 		pinchEver = true;
+		pinchArmUntil = 0;
 		touchDragging = false;
 		touchDragId = null;
 		const d = touchDistance(e.touches[0], e.touches[1]);
