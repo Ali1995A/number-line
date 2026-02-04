@@ -510,8 +510,8 @@ axis.addEventListener("pointermove", (e) => {
 	const now = performance.now();
 	const dt = now - lastRippleAt;
 	const dist = Math.hypot(x - lastRippleX, y - lastRippleY);
-	const rippleDt = lowEndIPad ? 140 : 80;
-	const rippleDist = lowEndIPad ? 32 : 18;
+	const rippleDt = lowEndIPad ? 180 : 80;
+	const rippleDist = lowEndIPad ? 44 : 18;
 	if (dt >= rippleDt && dist >= rippleDist) {
 		lastRippleAt = now;
 		lastRippleX = x;
@@ -599,8 +599,7 @@ axis.addEventListener(
 				lastRippleX = x;
 				lastRippleY = y;
 				particles.addRipple(x, y);
-			} else
-			if (dt >= (lowEndIPad ? 140 : 80) && dist >= (lowEndIPad ? 32 : 18)) {
+			} else if (dt >= (lowEndIPad ? 180 : 80) && dist >= (lowEndIPad ? 44 : 18)) {
 				lastRippleAt = now;
 				lastRippleX = x;
 				lastRippleY = y;

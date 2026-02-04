@@ -44,6 +44,7 @@ export class ParticleBlocks {
 		| {
 				fromField: number;
 				toField: number;
+				singleField: boolean;
 				dir: 1 | -1;
 				startMs: number;
 				durMs: number;
@@ -106,7 +107,8 @@ export class ParticleBlocks {
 		this.canvas.style.height = "100%";
 		this.canvas.style.pointerEvents = "none";
 		this.canvas.style.zIndex = "1";
-		this.canvas.style.borderRadius = "16px";
+		// Avoid extra clip/overdraw on iPad; the host already has overflow-hidden + rounded corners.
+		this.canvas.style.borderRadius = "0px";
 
 		if (this.beforeEl) host.insertBefore(this.canvas, this.beforeEl);
 		else host.appendChild(this.canvas);
@@ -117,6 +119,8 @@ export class ParticleBlocks {
 			premultipliedAlpha: false,
 			antialias: !this.perf.lowEnd,
 			precision: this.perf.lowEnd ? "mediump" : "highp",
+			depth: false,
+			stencil: false,
 			powerPreference: "low-power",
 		});
 		this.renderer.sortObjects = false;
@@ -217,10 +221,13 @@ export class ParticleBlocks {
 			const nowMs = performance.now();
 			const dir = (params.k > this.params.k ? 1 : -1) as 1 | -1;
 			const fromField = this.activeField;
-			const toField = 1 - fromField;
+			// Low-end iPad: avoid rendering two full fields during transition (massive overdraw).
+			const singleField = this.perf.lowEnd;
+			const toField = singleField ? fromField : 1 - fromField;
 			this.kTransition = {
 				fromField,
 				toField,
+				singleField,
 				dir,
 				startMs: nowMs,
 				durMs: this.kAnimDurMs,
@@ -228,6 +235,7 @@ export class ParticleBlocks {
 				toParams: params,
 			};
 			this.fields[toField].group.visible = true;
+			if (!singleField) this.fields[fromField].group.visible = true;
 		}
 
 		this.params = params;
@@ -247,7 +255,8 @@ export class ParticleBlocks {
 		const now = performance.now() / 1000;
 		const yUp = this.height - y;
 		this.ripples.push({ x, y: yUp, start: now }, { x: this.width - x, y: yUp, start: now });
-		if (this.ripples.length > 16) this.ripples.splice(0, this.ripples.length - 16);
+		const maxRipples = this.perf.lowEnd ? 8 : 16;
+		if (this.ripples.length > maxRipples) this.ripples.splice(0, this.ripples.length - maxRipples);
 		this.requestFrame();
 	}
 
@@ -456,34 +465,64 @@ export class ParticleBlocks {
 			const fromField = this.fields[tr.fromField];
 			const toField = this.fields[tr.toField];
 
+			// Interpolate counts so “how many blocks” stays continuous through the step.
+			const mix = smoothstep(0.22, 0.78, e);
+			const fromCountsFull = applyCounts(fromField, tr.fromParams);
+			const toCountsFull = applyCounts(toField, tr.toParams);
+			const interpCounts = {
+				negCount: clampInt(
+					Math.round(fromCountsFull.negCount + (toCountsFull.negCount - fromCountsFull.negCount) * mix),
+					0,
+					10000,
+				),
+				posCount: clampInt(
+					Math.round(fromCountsFull.posCount + (toCountsFull.posCount - fromCountsFull.posCount) * mix),
+					0,
+					10000,
+				),
+			};
+
+			if (tr.singleField) {
+				// Low-end: single-field mode — no cross-fade (avoids 2× overdraw).
+				fromField.group.visible = true;
+				fromField.group.scale.set(fromScale, fromScale, 1);
+				setFieldAlpha(fromField, 1);
+				fromField.negActive.count = interpCounts.negCount;
+				fromField.posActive.count = interpCounts.posCount;
+				this.lastNegCount = interpCounts.negCount;
+				this.lastPosCount = interpCounts.posCount;
+
+				updateRippleMatrices(fromField, fromScale, interpCounts.negCount, interpCounts.posCount);
+				this.deformBaseLocally(fromField, fromScale, waveAt, time);
+
+				this.renderer.render(this.scene, this.camera);
+				this.renderedOnce = true;
+
+				if (t >= 1) {
+					this.kTransition = null;
+					fromField.group.scale.set(1, 1, 1);
+					applyCounts(fromField, tr.toParams);
+				}
+				if (this.kTransition) this.requestFrame();
+				return;
+			}
+
 			fromField.group.visible = true;
 			toField.group.visible = true;
 			fromField.group.scale.set(fromScale, fromScale, 1);
 			toField.group.scale.set(toScale, toScale, 1);
 
 			// Keep particles visually solid: cross-fade only in a short middle window.
-			const mix = smoothstep(0.22, 0.78, e);
 			setFieldAlpha(fromField, 1 - mix);
 			setFieldAlpha(toField, mix);
 
-			// Ease active counts to avoid “popping” while scaling.
-			const fromCountsFull = applyCounts(fromField, tr.fromParams);
-			const toCountsFull = applyCounts(toField, tr.toParams);
-			const fromCounts = {
-				negCount: fromCountsFull.negCount,
-				posCount: fromCountsFull.posCount,
-			};
-			const toCounts = {
-				negCount: clampInt(Math.round(toCountsFull.negCount * mix), 0, 10000),
-				posCount: clampInt(Math.round(toCountsFull.posCount * mix), 0, 10000),
-			};
-			toField.negActive.count = toCounts.negCount;
-			toField.posActive.count = toCounts.posCount;
-			this.lastNegCount = toCounts.negCount;
-			this.lastPosCount = toCounts.posCount;
+			toField.negActive.count = interpCounts.negCount;
+			toField.posActive.count = interpCounts.posCount;
+			this.lastNegCount = interpCounts.negCount;
+			this.lastPosCount = interpCounts.posCount;
 
-			updateRippleMatrices(fromField, fromScale, fromCounts.negCount, fromCounts.posCount);
-			updateRippleMatrices(toField, toScale, toCounts.negCount, toCounts.posCount);
+			updateRippleMatrices(fromField, fromScale, fromCountsFull.negCount, fromCountsFull.posCount);
+			updateRippleMatrices(toField, toScale, interpCounts.negCount, interpCounts.posCount);
 
 			// Also deform the *base* field locally so ripples are visible everywhere (not just “active count”).
 			this.deformBaseLocally(fromField, fromScale, waveAt, time);
@@ -756,10 +795,10 @@ function detectPerf() {
 		// iPad Pro 1st gen (A9X) benefits hugely from lower pixel ratio.
 		maxPixelRatio: lowEnd ? 1 : 1.5,
 		// Limit ripple deformation window size and sampling density.
-		rippleMaxCells: lowEnd ? 70 : 110,
-		rippleStride: lowEnd ? 2 : 1,
+		rippleMaxCells: lowEnd ? 46 : 110,
+		rippleStride: lowEnd ? 3 : 1,
 		// Skip per-instance active ripple when the active set is huge.
-		activeRippleMax: lowEnd ? 1600 : 4000,
+		activeRippleMax: lowEnd ? 900 : 4000,
 	};
 }
 
