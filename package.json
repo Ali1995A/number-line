@@ -26,9 +26,9 @@
   },
   "scripts": {
     "test": "jest",
-    "dev": "parcel src/index.html",
+    "dev": "node scripts/write-build-info.mjs && parcel src/index.html",
     "build": "parcel build --target main --target types",
-    "build:site": "parcel build --target site",
+    "build:site": "node scripts/write-build-info.mjs && parcel build --target site",
     "vercel-build": "npm run build:site"
   },
   "keywords": [

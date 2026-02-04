@@ -10,6 +10,7 @@ import {
 import { DiscreteStepper } from "./ladder/stepper";
 import { ParticleBlocks } from "./ladder/particles";
 import { RulerCanvas } from "./ladder/ruler-canvas";
+import { BUILD_SHA, BUILD_VERSION } from "./build-info";
 
 type State = {
 	k: number;
@@ -28,6 +29,7 @@ const axis = mustGetEl("#axis");
 const currentValueEl = mustGetEl("#current-value");
 const rangeLabelEl = mustGetEl("#range-label");
 const scaleLabelEl = mustGetEl("#scale-label");
+const buildBadgeEl = mustGetEl("#build-badge");
 
 const btnZoomIn = mustGetEl("#btn-zoom-in") as HTMLButtonElement;
 const btnZoomOut = mustGetEl("#btn-zoom-out") as HTMLButtonElement;
@@ -49,6 +51,7 @@ const overlayUI = createOverlayUI(layers.overlay);
 
 // Temporarily disable ripple visuals to focus on pinch + rendering stability.
 particles.setRipplesEnabled(false);
+buildBadgeEl.textContent = `v${BUILD_VERSION} · ${BUILD_SHA}`;
 
 const state: State = {
 	k: 0,
