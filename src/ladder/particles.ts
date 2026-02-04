@@ -25,6 +25,9 @@ const POS_RGB = { r: 251, g: 113, b: 133 }; // rose-400
 
 export class ParticleBlocks {
 	private canvas: HTMLCanvasElement;
+	private mode: "webgl" | "2d" = "webgl";
+	private ctx2d: CanvasRenderingContext2D | null = null;
+	private contextLost = false;
 	private renderer: THREE.WebGLRenderer;
 	private scene: THREE.Scene;
 	private camera: THREE.OrthographicCamera;
@@ -114,16 +117,52 @@ export class ParticleBlocks {
 		if (this.beforeEl) host.insertBefore(this.canvas, this.beforeEl);
 		else host.appendChild(this.canvas);
 
+		// Some Chrome (especially incognito) + certain GPU/driver combos can fail WebGL silently and show a black canvas.
+		// We explicitly create the context and fall back to 2D canvas if WebGL is unavailable or lost.
+		const powerPreference = this.perf.lowEnd ? "low-power" : "high-performance";
+		const glAttrs: WebGLContextAttributes = {
+			alpha: false,
+			antialias: !this.perf.lowEnd,
+			depth: false,
+			stencil: false,
+			premultipliedAlpha: false,
+			preserveDrawingBuffer: false,
+			powerPreference: powerPreference as any,
+		};
+
+		const gl =
+			(this.canvas.getContext("webgl2", glAttrs as any) as WebGL2RenderingContext | null) ||
+			(this.canvas.getContext("webgl", glAttrs as any) as WebGLRenderingContext | null);
+
+		this.canvas.addEventListener(
+			"webglcontextlost",
+			(e) => {
+				e.preventDefault();
+				this.contextLost = true;
+				// Switch to 2D fallback so users don't see a black screen.
+				this.enable2DFallback();
+			},
+			{ passive: false },
+		);
+
+		if (!gl) {
+			this.enable2DFallback();
+			this.resize();
+			this.requestFrame();
+			return;
+		}
+
 		// Note: on some desktop Chrome/GPU combos, alpha:true canvas may present as a black surface.
 		// We render onto an opaque canvas and clear to white for consistent visuals + better perf.
 		this.renderer = new THREE.WebGLRenderer({
 			canvas: this.canvas,
+			context: gl as any,
 			alpha: false,
 			antialias: !this.perf.lowEnd,
 			precision: this.perf.lowEnd ? "mediump" : "highp",
 			depth: false,
 			stencil: false,
-			powerPreference: "low-power",
+			powerPreference,
 		});
 		this.renderer.sortObjects = false;
 		this.renderer.setClearColor(0xffffff, 1);
@@ -200,6 +239,13 @@ export class ParticleBlocks {
 		this.requestFrame();
 	}
 
+	private enable2DFallback() {
+		this.mode = "2d";
+		this.ctx2d = this.canvas.getContext("2d", { alpha: false, desynchronized: true }) as any;
+		// Make sure fallback is not black.
+		this.canvas.style.background = "#ffffff";
+	}
+
 	set(params: BlockParams) {
 		const nextW = Math.max(1, Math.floor(params.width));
 		const nextH = Math.max(1, Math.floor(params.height));
@@ -211,8 +257,10 @@ export class ParticleBlocks {
 			this.width = nextW;
 			this.height = nextH;
 			this.activeField = 0;
-			this.fields[0].group.visible = true;
-			this.fields[1].group.visible = false;
+			if (this.mode === "webgl") {
+				this.fields[0].group.visible = true;
+				this.fields[1].group.visible = false;
+			}
 			this.kTransition = null;
 			this.layoutDirty = true;
 			this.requestFrame();
@@ -266,7 +314,7 @@ export class ParticleBlocks {
 		const rect = this.host.getBoundingClientRect();
 		this.width = Math.max(1, Math.floor(rect.width));
 		this.height = Math.max(1, Math.floor(rect.height));
-		this.renderer.setSize(this.width, this.height, false);
+		if (this.mode === "webgl") this.renderer.setSize(this.width, this.height, false);
 		this.camera.left = 0;
 		this.camera.right = this.width;
 		this.camera.top = this.height;
@@ -280,17 +328,19 @@ export class ParticleBlocks {
 		this.destroyed = true;
 		if (this.rafId != null) cancelAnimationFrame(this.rafId);
 		this.rafId = null;
-		for (const f of this.fields) {
-			f.negBase.geometry.dispose();
-			f.negActive.geometry.dispose();
-			f.posBase.geometry.dispose();
-			f.posActive.geometry.dispose();
-			f.negBase.material.dispose();
-			f.negActive.material.dispose();
-			f.posBase.material.dispose();
-			f.posActive.material.dispose();
+		if (this.mode === "webgl") {
+			for (const f of this.fields) {
+				f.negBase.geometry.dispose();
+				f.negActive.geometry.dispose();
+				f.posBase.geometry.dispose();
+				f.posActive.geometry.dispose();
+				f.negBase.material.dispose();
+				f.negActive.material.dispose();
+				f.posBase.material.dispose();
+				f.posActive.material.dispose();
+			}
+			this.renderer.dispose();
 		}
-		this.renderer.dispose();
 	}
 
 	private requestFrame() {
@@ -320,6 +370,10 @@ export class ParticleBlocks {
 	}
 
 	private renderFrame(time: number) {
+		if (this.mode !== "webgl") {
+			this.renderFrame2D(time);
+			return;
+		}
 		if (!this.params) {
 			for (const f of this.fields) {
 				f.negBase.count = 0;
@@ -681,6 +735,107 @@ export class ParticleBlocks {
 		this.renderedOnce = true;
 	}
 
+	private renderFrame2D(time: number) {
+		const ctx = this.ctx2d;
+		if (!ctx) return;
+		if (!this.params) {
+			ctx.fillStyle = "#ffffff";
+			ctx.fillRect(0, 0, this.width, this.height);
+			return;
+		}
+		if (this.layoutDirty) this.rebuildLayout();
+
+		const p = this.params;
+		const midX = p.midX;
+		const midY = this.height * 0.5;
+
+		// Background
+		ctx.fillStyle = "#ffffff";
+		ctx.fillRect(0, 0, this.width, this.height);
+
+		const unitPow = Math.max(0, p.k - 4);
+		const unitValue = Math.pow(10, unitPow);
+		const negValue = Math.min(p.valueA, p.valueB, 0);
+		const posValue = Math.max(p.valueA, p.valueB, 0);
+		const baseNegCount = clampInt(Math.floor(Math.abs(Math.trunc(negValue)) / unitValue), 0, 10000);
+		const basePosCount = clampInt(Math.floor(Math.abs(Math.trunc(posValue)) / unitValue), 0, 10000);
+
+		const drawSquares = (
+			bases: Array<{ x: number; y: number; s: number }>,
+			count: number,
+			color: string,
+			alpha: number,
+			scale: number,
+		) => {
+			ctx.globalAlpha = alpha;
+			ctx.fillStyle = color;
+			for (let i = 0; i < bases.length; i++) {
+				const b = bases[i];
+				const wx = midX + b.x * scale;
+				const wyUp = midY + b.y * scale;
+				const sy = this.height - wyUp;
+				const s = b.s * scale;
+				ctx.fillRect(wx - s * 0.5, sy - s * 0.5, s, s);
+			}
+			ctx.globalAlpha = 1;
+
+			ctx.globalAlpha = 0.95;
+			for (let i = 0; i < Math.min(count, bases.length); i++) {
+				const b = bases[i];
+				const wx = midX + b.x * scale;
+				const wyUp = midY + b.y * scale;
+				const sy = this.height - wyUp;
+				const s = b.s * scale;
+				ctx.fillRect(wx - s * 0.5, sy - s * 0.5, s, s);
+			}
+			ctx.globalAlpha = 1;
+		};
+
+		// Simple 10× scaling for transitions.
+		let scale = 1;
+		let negCount = baseNegCount;
+		let posCount = basePosCount;
+		if (this.kTransition) {
+			const tr = this.kTransition;
+			const t = clamp((time * 1000 - tr.startMs) / tr.durMs, 0, 1);
+			const e = this.easeInOutCubic(t);
+			const mix = smoothstep(0.22, 0.78, e);
+			scale = Math.pow(10, -tr.dir * t);
+
+			const unitPowTo = Math.max(0, tr.toParams.k - 4);
+			const unitValueTo = Math.pow(10, unitPowTo);
+			const negValueTo = Math.min(tr.toParams.valueA, tr.toParams.valueB, 0);
+			const posValueTo = Math.max(tr.toParams.valueA, tr.toParams.valueB, 0);
+			const toNeg = clampInt(Math.floor(Math.abs(Math.trunc(negValueTo)) / unitValueTo), 0, 10000);
+			const toPos = clampInt(Math.floor(Math.abs(Math.trunc(posValueTo)) / unitValueTo), 0, 10000);
+			negCount = clampInt(Math.round(baseNegCount + (toNeg - baseNegCount) * mix), 0, 10000);
+			posCount = clampInt(Math.round(basePosCount + (toPos - basePosCount) * mix), 0, 10000);
+			if (t >= 1) this.kTransition = null;
+		}
+
+		drawSquares(this.negBases, negCount, "rgb(56,189,248)", 0.22, scale);
+		drawSquares(this.posBases, posCount, "rgb(251,113,133)", 0.22, scale);
+
+		// Ripple fallback: draw expanding rings.
+		if (this.ripples.length > 0) {
+			ctx.save();
+			for (const r of this.ripples) {
+				const dt = time - r.start;
+				if (dt < 0) continue;
+				const radius = this.rippleSpeedPx * dt;
+				ctx.globalAlpha = 0.65 * Math.exp(-dt * 0.7);
+				ctx.strokeStyle = "rgba(255,255,255,0.95)";
+				ctx.lineWidth = 2;
+				ctx.beginPath();
+				ctx.arc(r.x, this.height - r.y, radius, 0, Math.PI * 2);
+				ctx.stroke();
+			}
+			ctx.restore();
+		}
+
+		if (this.kTransition || this.ripples.length > 0) this.requestFrame();
+	}
+
 	private rebuildLayout() {
 		this.layoutDirty = false;
 		this.negBases = [];
@@ -749,6 +904,8 @@ export class ParticleBlocks {
 
 		buildFieldFromAxis(this.negBases, "left");
 		buildFieldFromAxis(this.posBases, "right");
+
+		if (this.mode !== "webgl") return;
 
 		// Bake static matrices to both fields. Active meshes reuse these unless a ripple is animating.
 		const tmp = new THREE.Object3D();
