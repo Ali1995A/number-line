@@ -24,7 +24,8 @@ const NEG_RGB = { r: 56, g: 189, b: 248 }; // sky-400
 const POS_RGB = { r: 251, g: 113, b: 133 }; // rose-400
 
 export class ParticleBlocks {
-	private canvas: HTMLCanvasElement;
+	private canvasGL: HTMLCanvasElement;
+	private canvas2D: HTMLCanvasElement;
 	private mode: "webgl" | "2d" = "webgl";
 	private ctx2d: CanvasRenderingContext2D | null = null;
 	private dpr2d = 1;
@@ -107,19 +108,34 @@ export class ParticleBlocks {
 
 	constructor(private host: HTMLElement, private beforeEl?: Element) {
 		this.perf = detectPerf();
-		this.canvas = document.createElement("canvas");
-		this.canvas.className = "nl-particles";
-		this.canvas.style.position = "absolute";
-		this.canvas.style.inset = "0";
-		this.canvas.style.width = "100%";
-		this.canvas.style.height = "100%";
-		this.canvas.style.pointerEvents = "none";
-		this.canvas.style.zIndex = "1";
+		this.canvasGL = document.createElement("canvas");
+		this.canvasGL.className = "nl-particles";
+		this.canvasGL.style.position = "absolute";
+		this.canvasGL.style.inset = "0";
+		this.canvasGL.style.width = "100%";
+		this.canvasGL.style.height = "100%";
+		this.canvasGL.style.pointerEvents = "none";
+		this.canvasGL.style.zIndex = "1";
 		// Avoid extra clip/overdraw on iPad; the host already has overflow-hidden + rounded corners.
-		this.canvas.style.borderRadius = "0px";
+		this.canvasGL.style.borderRadius = "0px";
 
-		if (this.beforeEl) host.insertBefore(this.canvas, this.beforeEl);
-		else host.appendChild(this.canvas);
+		// 2D canvas is created up-front (so it always has a 2D context) and is shown only in fallback.
+		this.canvas2D = document.createElement("canvas");
+		this.canvas2D.className = "nl-particles";
+		this.canvas2D.style.cssText = this.canvasGL.style.cssText;
+		this.canvas2D.style.zIndex = "1";
+		this.canvas2D.style.pointerEvents = "none";
+		this.canvas2D.style.display = "none";
+		this.canvas2D.style.background = "#ffffff";
+		this.ctx2d = this.canvas2D.getContext("2d", { alpha: false, desynchronized: true }) as any;
+
+		if (this.beforeEl) {
+			host.insertBefore(this.canvasGL, this.beforeEl);
+			host.insertBefore(this.canvas2D, this.beforeEl);
+		} else {
+			host.appendChild(this.canvasGL);
+			host.appendChild(this.canvas2D);
+		}
 
 		// Some Chrome (especially incognito) + certain GPU/driver combos can fail WebGL silently and show a black canvas.
 		// We explicitly create the context and fall back to 2D canvas if WebGL is unavailable or lost.
@@ -135,11 +151,11 @@ export class ParticleBlocks {
 		};
 
 		const gl =
-			(this.canvas.getContext("webgl2", glAttrs as any) as WebGL2RenderingContext | null) ||
-			(this.canvas.getContext("webgl", glAttrs as any) as WebGLRenderingContext | null);
+			(this.canvasGL.getContext("webgl2", glAttrs as any) as WebGL2RenderingContext | null) ||
+			(this.canvasGL.getContext("webgl", glAttrs as any) as WebGLRenderingContext | null);
 		this.gl = gl;
 
-		this.canvas.addEventListener(
+		this.canvasGL.addEventListener(
 			"webglcontextlost",
 			(e) => {
 				e.preventDefault();
@@ -160,7 +176,7 @@ export class ParticleBlocks {
 		// Note: on some desktop Chrome/GPU combos, alpha:true canvas may present as a black surface.
 		// We render onto an opaque canvas and clear to white for consistent visuals + better perf.
 		this.renderer = new THREE.WebGLRenderer({
-			canvas: this.canvas,
+			canvas: this.canvasGL,
 			context: gl as any,
 			alpha: false,
 			antialias: !this.perf.lowEnd,
@@ -262,42 +278,12 @@ export class ParticleBlocks {
 
 	private enable2DFallback() {
 		this.mode = "2d";
-		// IMPORTANT: a canvas can't have both WebGL and 2D contexts.
-		// If this canvas already has WebGL, we must replace it to get a 2D context.
-		this.ctx2d = (this.canvas.getContext("2d", { alpha: false, desynchronized: true }) as any) ?? null;
-		if (!this.ctx2d) {
-			this.replaceCanvasFor2D();
-		}
+		this.canvasGL.style.display = "none";
+		this.canvas2D.style.display = "block";
 		// Make sure fallback is not black.
-		this.canvas.style.background = "#ffffff";
+		this.canvas2D.style.background = "#ffffff";
 		this.gl = null;
-		// Ensure 2D bitmap matches container size.
 		this.resize();
-	}
-
-	private replaceCanvasFor2D() {
-		const next = document.createElement("canvas");
-		next.className = this.canvas.className;
-		// Preserve stacking/positioning.
-		next.style.cssText = this.canvas.style.cssText;
-		next.style.background = "#ffffff";
-
-		// Replace in DOM (keeps exact z-order position).
-		try {
-			this.canvas.replaceWith(next);
-		} catch {
-			// If replaceWith isn't available for some reason, fall back to insertion.
-			if (this.beforeEl && this.beforeEl.parentElement === this.host) this.host.insertBefore(next, this.beforeEl);
-			else this.host.appendChild(next);
-			try {
-				this.host.removeChild(this.canvas);
-			} catch {
-				// ignore
-			}
-		}
-
-		this.canvas = next;
-		this.ctx2d = next.getContext("2d", { alpha: false, desynchronized: true }) as any;
 	}
 
 	set(params: BlockParams) {
@@ -381,8 +367,8 @@ export class ParticleBlocks {
 		} else if (this.mode === "2d") {
 			const dpr = Math.min(window.devicePixelRatio || 1, this.perf.lowEnd ? 1 : 2);
 			this.dpr2d = dpr;
-			this.canvas.width = Math.max(1, Math.floor(this.width * dpr));
-			this.canvas.height = Math.max(1, Math.floor(this.height * dpr));
+			this.canvas2D.width = Math.max(1, Math.floor(this.width * dpr));
+			this.canvas2D.height = Math.max(1, Math.floor(this.height * dpr));
 			if (this.ctx2d) this.ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
 		}
 		this.layoutDirty = true;
@@ -820,7 +806,7 @@ export class ParticleBlocks {
 			probe.height = 1;
 			const pctx = probe.getContext("2d", { alpha: false });
 			if (pctx) {
-				pctx.drawImage(this.canvas, x, y, 1, 1, 0, 0, 1, 1);
+				pctx.drawImage(this.canvasGL, x, y, 1, 1, 0, 0, 1, 1);
 				const d = pctx.getImageData(0, 0, 1, 1).data;
 				if (d[0] < 8 && d[1] < 8 && d[2] < 8) {
 					this.enable2DFallback();
