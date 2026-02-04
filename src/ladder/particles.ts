@@ -286,6 +286,11 @@ export class ParticleBlocks {
 		this.resize();
 	}
 
+	force2D() {
+		if (this.mode === "2d") return;
+		this.enable2DFallback();
+	}
+
 	set(params: BlockParams) {
 		const nextW = Math.max(1, Math.floor(params.width));
 		const nextH = Math.max(1, Math.floor(params.height));

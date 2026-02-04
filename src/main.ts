@@ -53,6 +53,25 @@ const overlayUI = createOverlayUI(layers.overlay);
 particles.setRipplesEnabled(false);
 buildBadgeEl.textContent = `v${BUILD_VERSION} · ${BUILD_SHA}`;
 
+// Chrome Incognito often runs with restricted/unstable WebGL (can present as a black canvas without errors).
+// If storage quota is very small, it's a strong signal of Incognito: force 2D fallback to avoid black screen.
+(async () => {
+	try {
+		const ua = navigator.userAgent || "";
+		const isChrome = ua.includes("Chrome") && !ua.includes("Edg") && !ua.includes("OPR");
+		if (!isChrome) return;
+		const est = await navigator.storage?.estimate?.();
+		const quota = est?.quota ?? 0;
+		// Typical incognito quota is much smaller than normal profiles.
+		if (quota > 0 && quota < 200 * 1024 * 1024) {
+			particles.force2D();
+			buildBadgeEl.textContent = `${buildBadgeEl.textContent} · 2D`;
+		}
+	} catch {
+		// ignore
+	}
+})();
+
 const state: State = {
 	k: 0,
 	targetK: 0,
