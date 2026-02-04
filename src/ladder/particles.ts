@@ -418,6 +418,14 @@ export class ParticleBlocks {
 
 	resize() {
 		const rect = this.host.getBoundingClientRect();
+		// If resize is called before CSS/layout settles (common right after load),
+		// `getBoundingClientRect()` can briefly return 0×0. Avoid locking the canvas at 1×1,
+		// which would then be stretched to a full-size *black* surface (alpha:false default).
+		if (rect.width < 2 || rect.height < 2) {
+			requestAnimationFrame(() => this.resize());
+			return;
+		}
+
 		this.width = Math.max(1, Math.floor(rect.width));
 		this.height = Math.max(1, Math.floor(rect.height));
 		if (this.mode === "webgl") {
