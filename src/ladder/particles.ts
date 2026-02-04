@@ -27,6 +27,7 @@ export class ParticleBlocks {
 	private canvas: HTMLCanvasElement;
 	private mode: "webgl" | "2d" = "webgl";
 	private ctx2d: CanvasRenderingContext2D | null = null;
+	private dpr2d = 1;
 	private contextLost = false;
 	private ripplesEnabled = true;
 	private gl: WebGLRenderingContext | WebGL2RenderingContext | null = null;
@@ -270,6 +271,8 @@ export class ParticleBlocks {
 		// Make sure fallback is not black.
 		this.canvas.style.background = "#ffffff";
 		this.gl = null;
+		// Ensure 2D bitmap matches container size.
+		this.resize();
 	}
 
 	private replaceCanvasFor2D() {
@@ -335,8 +338,10 @@ export class ParticleBlocks {
 				fromParams: this.params,
 				toParams: params,
 			};
-			this.fields[toField].group.visible = true;
-			if (!singleField) this.fields[fromField].group.visible = true;
+			if (this.mode === "webgl") {
+				this.fields[toField].group.visible = true;
+				if (!singleField) this.fields[fromField].group.visible = true;
+			}
 		}
 
 		this.params = params;
@@ -373,6 +378,12 @@ export class ParticleBlocks {
 			this.camera.top = this.height;
 			this.camera.bottom = 0;
 			this.camera.updateProjectionMatrix();
+		} else if (this.mode === "2d") {
+			const dpr = Math.min(window.devicePixelRatio || 1, this.perf.lowEnd ? 1 : 2);
+			this.dpr2d = dpr;
+			this.canvas.width = Math.max(1, Math.floor(this.width * dpr));
+			this.canvas.height = Math.max(1, Math.floor(this.height * dpr));
+			if (this.ctx2d) this.ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
 		}
 		this.layoutDirty = true;
 		this.requestFrame();
@@ -799,14 +810,30 @@ export class ParticleBlocks {
 
 	private checkBlackFrameOnce() {
 		if (this.mode !== "webgl") return;
-		const gl = this.gl;
-		if (!gl) return;
 		try {
-			const px = new Uint8Array(4);
 			const x = Math.max(0, Math.min(this.width - 1, Math.floor(this.width / 2)));
 			const y = Math.max(0, Math.min(this.height - 1, Math.floor(this.height / 2)));
+
+			// Prefer sampling the *presented* pixel via drawImage (matches what users see).
+			const probe = document.createElement("canvas");
+			probe.width = 1;
+			probe.height = 1;
+			const pctx = probe.getContext("2d", { alpha: false });
+			if (pctx) {
+				pctx.drawImage(this.canvas, x, y, 1, 1, 0, 0, 1, 1);
+				const d = pctx.getImageData(0, 0, 1, 1).data;
+				if (d[0] < 8 && d[1] < 8 && d[2] < 8) {
+					this.enable2DFallback();
+					this.requestFrame();
+					return;
+				}
+			}
+
+			// Fallback: sample from WebGL back buffer.
+			const gl = this.gl;
+			if (!gl) return;
+			const px = new Uint8Array(4);
 			gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-			// We clear to white; if we're reading near-black, it's likely a present/compose failure.
 			if (px[0] < 8 && px[1] < 8 && px[2] < 8) {
 				this.enable2DFallback();
 				this.requestFrame();
