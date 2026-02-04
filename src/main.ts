@@ -537,6 +537,7 @@ let pinchStartDist = 0;
 let touchDragging = false;
 let touchDragId: number | null = null;
 let touchMoved = false;
+let pinchEver = false;
 let lastTouchX = 0;
 let lastTouchY = 0;
 axis.addEventListener(
@@ -550,11 +551,13 @@ axis.addEventListener(
 			draggingBall = pickNearestBall(e.touches[0].clientX);
 			lastTouchX = e.touches[0].clientX;
 			lastTouchY = e.touches[0].clientY;
-			// Immediate follow + ripple for kid-friendly feedback.
-			applyValueAtClientPoint(lastTouchX, lastTouchY, { emitRipple: true });
+			// Immediate follow (NO ripple yet). This prevents a ripple when the user is starting a pinch
+			// (the first finger would otherwise create one before the second finger lands).
+			applyValueAtClientPoint(lastTouchX, lastTouchY, { emitRipple: false });
 		} else if (e.touches.length === 2) {
 			e.preventDefault();
 			pinching = true;
+			pinchEver = true;
 			dragging = false;
 			touchDragging = false;
 			touchDragId = null;
@@ -610,6 +613,10 @@ axis.addEventListener(
 		}
 		if (e.touches.length !== 2) return;
 		e.preventDefault();
+		pinching = true;
+		pinchEver = true;
+		touchDragging = false;
+		touchDragId = null;
 		const d = touchDistance(e.touches[0], e.touches[1]);
 		if (pinchStartDist <= 0) pinchStartDist = d;
 		const ratio = d / pinchStartDist;
@@ -625,17 +632,41 @@ axis.addEventListener(
 	{ passive: false },
 );
 
-axis.addEventListener("touchend", () => {
-	pinchStartDist = 0;
-	pinching = false;
-	touchDragging = false;
-	touchDragId = null;
-	draggingBall = null;
-	touchMoved = false;
+axis.addEventListener("touchend", (e) => {
+	// Tap ripple: only when this gesture was never a pinch.
+	if (!pinching && !pinchEver && touchDragging && !touchMoved) {
+		applyValueAtClientPoint(lastTouchX, lastTouchY, { emitRipple: true });
+	}
+
+	// If one finger remains after a pinch, transition into single-finger drag (still no tap ripple).
+	if (e.touches.length === 1) {
+		const t = e.touches[0];
+		pinching = false;
+		touchDragging = true;
+		touchMoved = false;
+		touchDragId = t.identifier;
+		draggingBall = pickNearestBall(t.clientX);
+		lastTouchX = t.clientX;
+		lastTouchY = t.clientY;
+		applyValueAtClientPoint(lastTouchX, lastTouchY, { emitRipple: false });
+		return;
+	}
+
+	// Gesture ended.
+	if (e.touches.length === 0) {
+		pinchStartDist = 0;
+		pinching = false;
+		pinchEver = false;
+		touchDragging = false;
+		touchDragId = null;
+		draggingBall = null;
+		touchMoved = false;
+	}
 });
 axis.addEventListener("touchcancel", () => {
 	pinchStartDist = 0;
 	pinching = false;
+	pinchEver = false;
 	touchDragging = false;
 	touchDragId = null;
 	draggingBall = null;
