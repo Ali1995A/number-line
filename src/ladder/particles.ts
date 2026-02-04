@@ -287,6 +287,9 @@ export class ParticleBlocks {
 		this.canvas2D.style.background = "#ffffff";
 		this.gl = null;
 		this.resize();
+		// Ensure we paint at least one frame immediately; otherwise a late fallback can leave the canvas at its
+		// default (often black) until the next interaction triggers a render.
+		this.requestFrame();
 	}
 
 	force2D() {

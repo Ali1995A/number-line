@@ -696,13 +696,13 @@ axis.addEventListener(
 		if (pinchStartDist <= 0) pinchStartDist = d;
 		const ratio = d / pinchStartDist;
 		const threshold = 0.10;
-		// Match user expectation: pinch-out (distance increases) expands range (×10) => k+1.
-		// Pinch-in (distance decreases) shrinks range (÷10) => k-1.
+		// Pinch-out (distance increases) should "zoom in" (show smaller range) => k-1.
+		// Pinch-in (distance decreases) should "zoom out" (show larger range) => k+1.
 		if (ratio > 1 + threshold) {
-			setTargetK(state.k + 1);
+			setTargetK(state.k - 1);
 			pinchStartDist = d;
 		} else if (ratio < 1 - threshold) {
-			setTargetK(state.k - 1);
+			setTargetK(state.k + 1);
 			pinchStartDist = d;
 		}
 	},
