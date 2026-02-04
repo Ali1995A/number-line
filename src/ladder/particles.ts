@@ -291,6 +291,31 @@ export class ParticleBlocks {
 		this.enable2DFallback();
 	}
 
+	getMode() {
+		return this.mode;
+	}
+
+	// Best-effort: some Chrome/GPU paths present a black WebGL surface with no errors.
+	// Use a tiny 2D probe to sample the *presented* WebGL canvas.
+	probePresentedBlack() {
+		try {
+			if (this.mode !== "webgl") return false;
+			if (this.width <= 0 || this.height <= 0) return false;
+			const x = Math.max(0, Math.min(this.width - 1, Math.floor(this.width / 2)));
+			const y = Math.max(0, Math.min(this.height - 1, Math.floor(this.height / 2)));
+			const probe = document.createElement("canvas");
+			probe.width = 1;
+			probe.height = 1;
+			const pctx = probe.getContext("2d", { alpha: false });
+			if (!pctx) return false;
+			pctx.drawImage(this.canvasGL, x, y, 1, 1, 0, 0, 1, 1);
+			const d = pctx.getImageData(0, 0, 1, 1).data;
+			return d[0] < 8 && d[1] < 8 && d[2] < 8;
+		} catch {
+			return true;
+		}
+	}
+
 	set(params: BlockParams) {
 		const nextW = Math.max(1, Math.floor(params.width));
 		const nextH = Math.max(1, Math.floor(params.height));

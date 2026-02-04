@@ -72,6 +72,23 @@ buildBadgeEl.textContent = `v${BUILD_VERSION} · ${BUILD_SHA}`;
 	}
 })();
 
+// Extra safety: if the particle canvas still presents as black, force 2D (works in normal + incognito).
+// Runs a couple times to survive delayed GPU init.
+for (const delayMs of [450, 1400]) {
+	setTimeout(() => {
+		try {
+			if (particles.getMode() !== "webgl") return;
+			if (!particles.probePresentedBlack()) return;
+			particles.force2D();
+			if (!buildBadgeEl.textContent?.includes("2D")) {
+				buildBadgeEl.textContent = `${buildBadgeEl.textContent} · 2D`;
+			}
+		} catch {
+			// ignore
+		}
+	}, delayMs);
+}
+
 const state: State = {
 	k: 0,
 	targetK: 0,
