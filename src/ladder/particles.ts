@@ -261,9 +261,40 @@ export class ParticleBlocks {
 
 	private enable2DFallback() {
 		this.mode = "2d";
-		this.ctx2d = this.canvas.getContext("2d", { alpha: false, desynchronized: true }) as any;
+		// IMPORTANT: a canvas can't have both WebGL and 2D contexts.
+		// If this canvas already has WebGL, we must replace it to get a 2D context.
+		this.ctx2d = (this.canvas.getContext("2d", { alpha: false, desynchronized: true }) as any) ?? null;
+		if (!this.ctx2d) {
+			this.replaceCanvasFor2D();
+		}
 		// Make sure fallback is not black.
 		this.canvas.style.background = "#ffffff";
+		this.gl = null;
+	}
+
+	private replaceCanvasFor2D() {
+		const next = document.createElement("canvas");
+		next.className = this.canvas.className;
+		// Preserve stacking/positioning.
+		next.style.cssText = this.canvas.style.cssText;
+		next.style.background = "#ffffff";
+
+		// Replace in DOM (keeps exact z-order position).
+		try {
+			this.canvas.replaceWith(next);
+		} catch {
+			// If replaceWith isn't available for some reason, fall back to insertion.
+			if (this.beforeEl && this.beforeEl.parentElement === this.host) this.host.insertBefore(next, this.beforeEl);
+			else this.host.appendChild(next);
+			try {
+				this.host.removeChild(this.canvas);
+			} catch {
+				// ignore
+			}
+		}
+
+		this.canvas = next;
+		this.ctx2d = next.getContext("2d", { alpha: false, desynchronized: true }) as any;
 	}
 
 	set(params: BlockParams) {
@@ -335,12 +366,14 @@ export class ParticleBlocks {
 		const rect = this.host.getBoundingClientRect();
 		this.width = Math.max(1, Math.floor(rect.width));
 		this.height = Math.max(1, Math.floor(rect.height));
-		if (this.mode === "webgl") this.renderer.setSize(this.width, this.height, false);
-		this.camera.left = 0;
-		this.camera.right = this.width;
-		this.camera.top = this.height;
-		this.camera.bottom = 0;
-		this.camera.updateProjectionMatrix();
+		if (this.mode === "webgl") {
+			this.renderer.setSize(this.width, this.height, false);
+			this.camera.left = 0;
+			this.camera.right = this.width;
+			this.camera.top = this.height;
+			this.camera.bottom = 0;
+			this.camera.updateProjectionMatrix();
+		}
 		this.layoutDirty = true;
 		this.requestFrame();
 	}
