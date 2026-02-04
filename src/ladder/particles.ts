@@ -113,10 +113,11 @@ export class ParticleBlocks {
 		if (this.beforeEl) host.insertBefore(this.canvas, this.beforeEl);
 		else host.appendChild(this.canvas);
 
+		// Note: on some desktop Chrome/GPU combos, alpha:true canvas may present as a black surface.
+		// We render onto an opaque canvas and clear to white for consistent visuals + better perf.
 		this.renderer = new THREE.WebGLRenderer({
 			canvas: this.canvas,
-			alpha: true,
-			premultipliedAlpha: false,
+			alpha: false,
 			antialias: !this.perf.lowEnd,
 			precision: this.perf.lowEnd ? "mediump" : "highp",
 			depth: false,
@@ -124,7 +125,7 @@ export class ParticleBlocks {
 			powerPreference: "low-power",
 		});
 		this.renderer.sortObjects = false;
-		this.renderer.setClearColor(0x000000, 0);
+		this.renderer.setClearColor(0xffffff, 1);
 		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, this.perf.maxPixelRatio));
 		// Make colors pop correctly on iPad/Safari (sRGB output).
 		this.renderer.outputColorSpace = THREE.SRGBColorSpace;
