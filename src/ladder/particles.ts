@@ -434,8 +434,10 @@ export class ParticleBlocks {
 		// detect once and fall back to 2D to avoid a blank demo.
 		if (!this.checkedBlackFrame && this.gl && this.width > 0 && this.height > 0) {
 			this.checkedBlackFrame = true;
-			// Check after the first render to allow clearColor to hit the back buffer.
-			queueMicrotask(() => this.checkBlackFrameOnce());
+			// Check after the browser has had a chance to present (rAF twice is more reliable than microtask).
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => this.checkBlackFrameOnce());
+			});
 		}
 		if (!this.params) {
 			for (const f of this.fields) {
