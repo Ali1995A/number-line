@@ -89,6 +89,19 @@ for (const delayMs of [450, 1400]) {
 	}, delayMs);
 }
 
+// If ParticleBlocks falls back internally (context lost / black frame), reflect that in the badge.
+for (const delayMs of [600, 1600, 2600]) {
+	setTimeout(() => {
+		try {
+			if (particles.getMode() === "2d" && !buildBadgeEl.textContent?.includes("2D")) {
+				buildBadgeEl.textContent = `${buildBadgeEl.textContent} · 2D`;
+			}
+		} catch {
+			// ignore
+		}
+	}, delayMs);
+}
+
 const state: State = {
 	k: 0,
 	targetK: 0,
@@ -603,9 +616,8 @@ axis.addEventListener(
 			// Small grace window to allow the second finger to land for a pinch without generating a ripple.
 			// (This is the main reason “sometimes pinch still makes a ripple”.)
 			pinchArmUntil = touchStartAt + 180;
-			// Immediate follow (NO ripple yet). This prevents a ripple when the user is starting a pinch
-			// (the first finger would otherwise create one before the second finger lands).
-			applyValueAtClientPoint(lastTouchX, lastTouchY, { emitRipple: false });
+			// Do NOT update value on touchstart: many users place the first finger before the second when pinching.
+			// Updating here makes pinch feel like a “tap/drag” and can accidentally trigger ripple logic.
 		} else if (e.touches.length === 2) {
 			e.preventDefault();
 			pinching = true;
@@ -684,13 +696,13 @@ axis.addEventListener(
 		if (pinchStartDist <= 0) pinchStartDist = d;
 		const ratio = d / pinchStartDist;
 		const threshold = 0.10;
-		// Pinch-out (distance increases) should "zoom in" (show smaller range) => k-1.
-		// Pinch-in (distance decreases) should "zoom out" (show larger range) => k+1.
+		// Match user expectation: pinch-out (distance increases) expands range (×10) => k+1.
+		// Pinch-in (distance decreases) shrinks range (÷10) => k-1.
 		if (ratio > 1 + threshold) {
-			setTargetK(state.k - 1);
+			setTargetK(state.k + 1);
 			pinchStartDist = d;
 		} else if (ratio < 1 - threshold) {
-			setTargetK(state.k + 1);
+			setTargetK(state.k - 1);
 			pinchStartDist = d;
 		}
 	},

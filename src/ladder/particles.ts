@@ -28,6 +28,7 @@ export class ParticleBlocks {
 	private canvas2D: HTMLCanvasElement;
 	private mode: "webgl" | "2d" = "webgl";
 	private ctx2d: CanvasRenderingContext2D | null = null;
+	private probe2d: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
 	private dpr2d = 1;
 	private contextLost = false;
 	private ripplesEnabled = true;
@@ -116,6 +117,8 @@ export class ParticleBlocks {
 		this.canvasGL.style.height = "100%";
 		this.canvasGL.style.pointerEvents = "none";
 		this.canvasGL.style.zIndex = "1";
+		// Even if WebGL fails to present, never show a black rectangle.
+		this.canvasGL.style.background = "#ffffff";
 		// Avoid extra clip/overdraw on iPad; the host already has overflow-hidden + rounded corners.
 		this.canvasGL.style.borderRadius = "0px";
 
@@ -303,20 +306,44 @@ export class ParticleBlocks {
 			const bw = this.canvasGL.width | 0;
 			const bh = this.canvasGL.height | 0;
 			if (bw <= 0 || bh <= 0) return false;
-			// IMPORTANT: sample in *bitmap* coordinates (canvas.width/height), not CSS pixels.
-			const x = Math.max(0, Math.min(bw - 1, (bw / 2) | 0));
-			const y = Math.max(0, Math.min(bh - 1, (bh / 2) | 0));
-			const probe = document.createElement("canvas");
-			probe.width = 1;
-			probe.height = 1;
-			const pctx = probe.getContext("2d", { alpha: false });
-			if (!pctx) return false;
-			pctx.drawImage(this.canvasGL, x, y, 1, 1, 0, 0, 1, 1);
-			const d = pctx.getImageData(0, 0, 1, 1).data;
-			return d[0] < 8 && d[1] < 8 && d[2] < 8;
+			const luma = this.samplePresentedLuma(bw, bh);
+			// A too-strict threshold misses “dark but not pure black” surfaces. Use a higher cutoff.
+			return luma < 48;
 		} catch {
 			return true;
 		}
+	}
+
+	private samplePresentedLuma(bw: number, bh: number) {
+		if (!this.probe2d) {
+			const c = document.createElement("canvas");
+			c.width = 1;
+			c.height = 1;
+			const ctx = c.getContext("2d", { alpha: false });
+			if (!ctx) return 255;
+			this.probe2d = { canvas: c, ctx };
+		}
+
+		const { ctx } = this.probe2d;
+		// Sample multiple points to avoid accidentally sampling a non-black pixel (e.g. subtle lines).
+		const pts: Array<[number, number]> = [
+			[0.5, 0.5],
+			[0.25, 0.5],
+			[0.75, 0.5],
+			[0.5, 0.25],
+			[0.5, 0.75],
+		];
+
+		let sum = 0;
+		for (const [nx, ny] of pts) {
+			const x = Math.max(0, Math.min(bw - 1, Math.floor(bw * nx)));
+			const y = Math.max(0, Math.min(bh - 1, Math.floor(bh * ny)));
+			ctx.drawImage(this.canvasGL, x, y, 1, 1, 0, 0, 1, 1);
+			const d = ctx.getImageData(0, 0, 1, 1).data;
+			// fast luminance-ish
+			sum += (d[0] + d[1] + d[2]) / 3;
+		}
+		return sum / pts.length;
 	}
 
 	set(params: BlockParams) {
@@ -456,6 +483,13 @@ export class ParticleBlocks {
 	private renderFrame(time: number) {
 		if (this.mode !== "webgl") {
 			this.renderFrame2D(time);
+			return;
+		}
+		// Some devices silently lose WebGL without firing a reliable event (observed in Chrome incognito).
+		// Treat an already-lost context as fatal and fall back immediately.
+		if (this.gl && typeof (this.gl as any).isContextLost === "function" && (this.gl as any).isContextLost()) {
+			this.enable2DFallback();
+			this.requestFrame();
 			return;
 		}
 		// If WebGL is alive but presenting black in some Chrome (incognito) situations,
@@ -835,30 +869,23 @@ export class ParticleBlocks {
 			const bw = this.canvasGL.width | 0;
 			const bh = this.canvasGL.height | 0;
 			if (bw <= 0 || bh <= 0) return;
-			const x = Math.max(0, Math.min(bw - 1, (bw / 2) | 0));
-			const y = Math.max(0, Math.min(bh - 1, (bh / 2) | 0));
-
-			// Prefer sampling the *presented* pixel via drawImage (matches what users see).
-			const probe = document.createElement("canvas");
-			probe.width = 1;
-			probe.height = 1;
-			const pctx = probe.getContext("2d", { alpha: false });
-			if (pctx) {
-				pctx.drawImage(this.canvasGL, x, y, 1, 1, 0, 0, 1, 1);
-				const d = pctx.getImageData(0, 0, 1, 1).data;
-				if (d[0] < 8 && d[1] < 8 && d[2] < 8) {
-					this.enable2DFallback();
-					this.requestFrame();
-					return;
-				}
+			// Prefer sampling the *presented* pixels via drawImage (matches what users see).
+			const luma = this.samplePresentedLuma(bw, bh);
+			if (luma < 48) {
+				this.enable2DFallback();
+				this.requestFrame();
+				return;
 			}
 
 			// Fallback: sample from WebGL back buffer.
 			const gl = this.gl;
 			if (!gl) return;
+			const x = Math.max(0, Math.min(bw - 1, (bw / 2) | 0));
+			const y = Math.max(0, Math.min(bh - 1, (bh / 2) | 0));
 			const px = new Uint8Array(4);
 			gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-			if (px[0] < 8 && px[1] < 8 && px[2] < 8) {
+			const l = (px[0] + px[1] + px[2]) / 3;
+			if (l < 48) {
 				this.enable2DFallback();
 				this.requestFrame();
 			}
