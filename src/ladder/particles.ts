@@ -300,9 +300,12 @@ export class ParticleBlocks {
 	probePresentedBlack() {
 		try {
 			if (this.mode !== "webgl") return false;
-			if (this.width <= 0 || this.height <= 0) return false;
-			const x = Math.max(0, Math.min(this.width - 1, Math.floor(this.width / 2)));
-			const y = Math.max(0, Math.min(this.height - 1, Math.floor(this.height / 2)));
+			const bw = this.canvasGL.width | 0;
+			const bh = this.canvasGL.height | 0;
+			if (bw <= 0 || bh <= 0) return false;
+			// IMPORTANT: sample in *bitmap* coordinates (canvas.width/height), not CSS pixels.
+			const x = Math.max(0, Math.min(bw - 1, (bw / 2) | 0));
+			const y = Math.max(0, Math.min(bh - 1, (bh / 2) | 0));
 			const probe = document.createElement("canvas");
 			probe.width = 1;
 			probe.height = 1;
@@ -829,8 +832,11 @@ export class ParticleBlocks {
 	private checkBlackFrameOnce() {
 		if (this.mode !== "webgl") return;
 		try {
-			const x = Math.max(0, Math.min(this.width - 1, Math.floor(this.width / 2)));
-			const y = Math.max(0, Math.min(this.height - 1, Math.floor(this.height / 2)));
+			const bw = this.canvasGL.width | 0;
+			const bh = this.canvasGL.height | 0;
+			if (bw <= 0 || bh <= 0) return;
+			const x = Math.max(0, Math.min(bw - 1, (bw / 2) | 0));
+			const y = Math.max(0, Math.min(bh - 1, (bh / 2) | 0));
 
 			// Prefer sampling the *presented* pixel via drawImage (matches what users see).
 			const probe = document.createElement("canvas");
