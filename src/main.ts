@@ -47,6 +47,9 @@ ruler.setLowEnd(lowEndIPad);
 document.body.classList.toggle("nl-low-end", lowEndIPad);
 const overlayUI = createOverlayUI(layers.overlay);
 
+// Temporarily disable ripple visuals to focus on pinch + rendering stability.
+particles.setRipplesEnabled(false);
+
 const state: State = {
 	k: 0,
 	targetK: 0,
@@ -487,7 +490,7 @@ axis.addEventListener("pointerdown", (e) => {
 	axis.setPointerCapture(e.pointerId);
 
 	// Tap anywhere: value follows finger/mouse immediately + ripple.
-	applyValueAtClientPoint(e.clientX, e.clientY, { emitRipple: true });
+	applyValueAtClientPoint(e.clientX, e.clientY, { emitRipple: false });
 });
 
 axis.addEventListener("pointermove", (e) => {
@@ -512,7 +515,7 @@ axis.addEventListener("pointermove", (e) => {
 	const dist = Math.hypot(x - lastRippleX, y - lastRippleY);
 	const rippleDt = lowEndIPad ? 180 : 80;
 	const rippleDist = lowEndIPad ? 44 : 18;
-	if (dt >= rippleDt && dist >= rippleDist) {
+	if (particles.areRipplesEnabled() && dt >= rippleDt && dist >= rippleDist) {
 		lastRippleAt = now;
 		lastRippleX = x;
 		lastRippleY = y;
@@ -619,8 +622,8 @@ axis.addEventListener(
 				lastRippleAt = now;
 				lastRippleX = x;
 				lastRippleY = y;
-				particles.addRipple(x, y);
-			} else if (dt >= (lowEndIPad ? 180 : 80) && dist >= (lowEndIPad ? 44 : 18)) {
+				if (particles.areRipplesEnabled()) particles.addRipple(x, y);
+			} else if (particles.areRipplesEnabled() && dt >= (lowEndIPad ? 180 : 80) && dist >= (lowEndIPad ? 44 : 18)) {
 				lastRippleAt = now;
 				lastRippleX = x;
 				lastRippleY = y;
@@ -657,9 +660,7 @@ axis.addEventListener(
 
 axis.addEventListener("touchend", (e) => {
 	// Tap ripple: only when this gesture was never a pinch.
-	if (!pinching && !pinchEver && touchDragging && !touchMoved) {
-		applyValueAtClientPoint(lastTouchX, lastTouchY, { emitRipple: true });
-	}
+	// (ripples disabled)
 
 	// If one finger remains after a pinch, transition into single-finger drag (still no tap ripple).
 	if (e.touches.length === 1) {

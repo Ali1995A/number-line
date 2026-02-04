@@ -28,6 +28,9 @@ export class ParticleBlocks {
 	private mode: "webgl" | "2d" = "webgl";
 	private ctx2d: CanvasRenderingContext2D | null = null;
 	private contextLost = false;
+	private ripplesEnabled = true;
+	private gl: WebGLRenderingContext | WebGL2RenderingContext | null = null;
+	private checkedBlackFrame = false;
 	private renderer: THREE.WebGLRenderer;
 	private scene: THREE.Scene;
 	private camera: THREE.OrthographicCamera;
@@ -133,6 +136,7 @@ export class ParticleBlocks {
 		const gl =
 			(this.canvas.getContext("webgl2", glAttrs as any) as WebGL2RenderingContext | null) ||
 			(this.canvas.getContext("webgl", glAttrs as any) as WebGLRenderingContext | null);
+		this.gl = gl;
 
 		this.canvas.addEventListener(
 			"webglcontextlost",
@@ -239,6 +243,22 @@ export class ParticleBlocks {
 		this.requestFrame();
 	}
 
+	setRipplesEnabled(enabled: boolean) {
+		this.ripplesEnabled = enabled;
+		if (!enabled) {
+			this.ripples = [];
+			this.dirtyNegMark.fill(0);
+			this.dirtyPosMark.fill(0);
+			this.dirtyNegLen = 0;
+			this.dirtyPosLen = 0;
+		}
+		this.requestFrame();
+	}
+
+	areRipplesEnabled() {
+		return this.ripplesEnabled;
+	}
+
 	private enable2DFallback() {
 		this.mode = "2d";
 		this.ctx2d = this.canvas.getContext("2d", { alpha: false, desynchronized: true }) as any;
@@ -302,6 +322,7 @@ export class ParticleBlocks {
 	}
 
 	addRipple(x: number, y: number) {
+		if (!this.ripplesEnabled) return;
 		const now = performance.now() / 1000;
 		const yUp = this.height - y;
 		this.ripples.push({ x, y: yUp, start: now }, { x: this.width - x, y: yUp, start: now });
@@ -374,6 +395,13 @@ export class ParticleBlocks {
 			this.renderFrame2D(time);
 			return;
 		}
+		// If WebGL is alive but presenting black in some Chrome (incognito) situations,
+		// detect once and fall back to 2D to avoid a blank demo.
+		if (!this.checkedBlackFrame && this.gl && this.width > 0 && this.height > 0) {
+			this.checkedBlackFrame = true;
+			// Check after the first render to allow clearColor to hit the back buffer.
+			queueMicrotask(() => this.checkBlackFrameOnce());
+		}
 		if (!this.params) {
 			for (const f of this.fields) {
 				f.negBase.count = 0;
@@ -392,9 +420,10 @@ export class ParticleBlocks {
 		const midY = this.height * 0.5; // y-up center
 		this.stage.position.set(midX, midY, 0);
 
-		const hasRipples = this.ripples.length > 0;
+		const hasRipples = this.ripplesEnabled && this.ripples.length > 0;
 		const waveAt = (x: number, y: number) => {
 			// Traveling wavefront (ring) that expands until it exits the container.
+			if (!this.ripplesEnabled) return 0;
 			let wave = 0;
 			for (const r of this.ripples) {
 				const dt = time - r.start;
@@ -735,6 +764,27 @@ export class ParticleBlocks {
 		this.renderedOnce = true;
 	}
 
+	private checkBlackFrameOnce() {
+		if (this.mode !== "webgl") return;
+		const gl = this.gl;
+		if (!gl) return;
+		try {
+			const px = new Uint8Array(4);
+			const x = Math.max(0, Math.min(this.width - 1, Math.floor(this.width / 2)));
+			const y = Math.max(0, Math.min(this.height - 1, Math.floor(this.height / 2)));
+			gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+			// We clear to white; if we're reading near-black, it's likely a present/compose failure.
+			if (px[0] < 8 && px[1] < 8 && px[2] < 8) {
+				this.enable2DFallback();
+				this.requestFrame();
+			}
+		} catch {
+			// If readPixels fails for any reason, prefer fallback over black.
+			this.enable2DFallback();
+			this.requestFrame();
+		}
+	}
+
 	private renderFrame2D(time: number) {
 		const ctx = this.ctx2d;
 		if (!ctx) return;
@@ -816,8 +866,8 @@ export class ParticleBlocks {
 		drawSquares(this.negBases, negCount, "rgb(56,189,248)", 0.22, scale);
 		drawSquares(this.posBases, posCount, "rgb(251,113,133)", 0.22, scale);
 
-		// Ripple fallback: draw expanding rings.
-		if (this.ripples.length > 0) {
+		// Ripple fallback disabled when ripples are disabled.
+		if (this.ripplesEnabled && this.ripples.length > 0) {
 			ctx.save();
 			for (const r of this.ripples) {
 				const dt = time - r.start;
@@ -833,7 +883,7 @@ export class ParticleBlocks {
 			ctx.restore();
 		}
 
-		if (this.kTransition || this.ripples.length > 0) this.requestFrame();
+		if (this.kTransition || (this.ripplesEnabled && this.ripples.length > 0)) this.requestFrame();
 	}
 
 	private rebuildLayout() {
